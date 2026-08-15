@@ -544,7 +544,7 @@ class OutboxEvent(VersionedBusinessObject):
 @dataclass
 class Job(VersionedBusinessObject):
     job_type: str = ""
-    status: JobStatus = JobStatus.PENDING
+    status: JobStatus = JobStatus.QUEUED
     payload: dict[str, Any] = field(default_factory=dict)
     run_after: datetime | None = None
 

@@ -45,6 +45,10 @@ Run PostgreSQL 16 integration checks with Docker:
 
 `make test-postgres`
 
+Run Phase 2A PostgreSQL + Redis runtime integration checks with Docker:
+
+`make test-runtime`
+
 Run migrations locally against the configured `LAUNCH_OS_DATABASE_URL`:
 
 `make migrate`
@@ -56,5 +60,9 @@ Rollback to base:
 Run the API skeleton:
 
 `make run-api`
+
+Run local worker/scheduler processes through Docker Compose:
+
+`docker compose -f docker-compose.local.yml --profile runtime up worker scheduler`
 
 Local PostgreSQL and Redis are described in `docker-compose.local.yml`. PostgreSQL integration uses `docker-compose.integration.yml`. Staging-only compose is in `docker-compose.staging.yml`. No production compose or production secrets are present.

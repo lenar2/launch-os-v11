@@ -9,6 +9,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -538,11 +539,45 @@ class OutboxEventModel(Base):
 
 class JobModel(BusinessScopedMixin, Base):
     __tablename__ = "jobs"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "business_id",
+            "job_type",
+            "idempotency_key",
+            name="uq_jobs_tenant_type_idempotency",
+        ),
+        CheckConstraint("payload_schema_version >= 1", name="ck_jobs_payload_schema_positive"),
+        CheckConstraint("attempt_count >= 0", name="ck_jobs_attempt_count_nonnegative"),
+        CheckConstraint("max_attempts >= 1", name="ck_jobs_max_attempts_positive"),
+        CheckConstraint(
+            "status in ('QUEUED', 'RUNNING', 'RETRY_WAIT', 'SUCCEEDED', 'FAILED')",
+            name="ck_jobs_status_phase2a",
+        ),
+        Index("ix_jobs_due_scan", "status", "available_at"),
+        Index("ix_jobs_claim_scan", "status", "available_at", "lease_expires_at"),
+        Index("ix_jobs_lease_expires_at", "lease_expires_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     job_type: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    payload_schema_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_owner: Mapped[str | None] = mapped_column(String(128), index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_class: Mapped[str | None] = mapped_column(String(255))
+    error_summary: Mapped[str | None] = mapped_column(Text)
+    correlation_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    causation_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
     run_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

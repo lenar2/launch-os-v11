@@ -30,6 +30,32 @@ services:
       timeout: 5s
       retries: 20
 
+  worker:
+    image: ${LAUNCH_OS_IMAGE:?set LAUNCH_OS_IMAGE for staging}
+    environment:
+      LAUNCH_OS_ENV: staging
+      LAUNCH_OS_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-launch_os_v11}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-launch_os_v11_staging}
+      LAUNCH_OS_REDIS_URL: redis://redis:6379/0
+    command: ["python", "-m", "launch_os_v11.runtime.worker_main"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  scheduler:
+    image: ${LAUNCH_OS_IMAGE:?set LAUNCH_OS_IMAGE for staging}
+    environment:
+      LAUNCH_OS_ENV: staging
+      LAUNCH_OS_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-launch_os_v11}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-launch_os_v11_staging}
+      LAUNCH_OS_REDIS_URL: redis://redis:6379/0
+    command: ["python", "-m", "launch_os_v11.runtime.scheduler_main"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   launch_os_v11_staging_pgdata:
   launch_os_v11_staging_redis:

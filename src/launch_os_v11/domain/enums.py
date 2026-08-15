@@ -102,8 +102,10 @@ class ExecutionStatus(StrEnum):
 
 
 class JobStatus(StrEnum):
+    QUEUED = "QUEUED"
     PENDING = "PENDING"
     RUNNING = "RUNNING"
+    RETRY_WAIT = "RETRY_WAIT"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
 

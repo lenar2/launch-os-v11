@@ -7,10 +7,12 @@ from launch_os_v11.persistence.models import Base
 def test_domain_layer_does_not_depend_on_fastapi_ai_runtime_or_connectors() -> None:
     forbidden_roots = {
         "fastapi",
+        "redis",
         "sqlalchemy",
         "launch_os_v11.ai_runtime",
         "launch_os_v11.connectors",
         "launch_os_v11.persistence",
+        "launch_os_v11.runtime",
     }
     for path in Path("src/launch_os_v11/domain").glob("*.py"):
         tree = ast.parse(path.read_text())
@@ -80,4 +82,38 @@ def test_reserved_packages_do_not_create_direct_agent_to_write_path() -> None:
     forbidden_terms = {"send_message", "publish", "external_write", "execute_connector"}
     for path in reserved_paths:
         text = path.read_text()
+        assert not any(term in text for term in forbidden_terms), path
+
+
+def test_runtime_worker_has_no_ai_connector_or_business_decision_logic() -> None:
+    forbidden_roots = {
+        "launch_os_v11.ai_runtime",
+        "launch_os_v11.connectors",
+        "launch_os_v11.production",
+        "launch_os_v11.execution",
+    }
+    forbidden_terms = {
+        "telegram",
+        "instagram",
+        "getcourse",
+        "model_router",
+        "controller_matrix",
+        "selected_action",
+    }
+    runtime_logic_paths = [
+        Path("src/launch_os_v11/runtime/worker.py"),
+        Path("src/launch_os_v11/runtime/scheduler.py"),
+        Path("src/launch_os_v11/runtime/handlers.py"),
+    ]
+    for path in runtime_logic_paths:
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported = {alias.name for alias in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                imported = {node.module}
+            else:
+                continue
+            assert imported.isdisjoint(forbidden_roots), f"{path} imports {imported}"
+        text = path.read_text().lower()
         assert not any(term in text for term in forbidden_terms), path

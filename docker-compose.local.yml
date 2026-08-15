@@ -27,5 +27,45 @@ services:
       timeout: 3s
       retries: 20
 
+  worker:
+    image: python:3.11-slim
+    profiles: ["runtime"]
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      LAUNCH_OS_ENV: local
+      LAUNCH_OS_DATABASE_URL: postgresql+psycopg://launch_os_v11:launch_os_v11@postgres:5432/launch_os_v11
+      LAUNCH_OS_REDIS_URL: redis://redis:6379/0
+    command: >
+      sh -c "python -m pip install -r requirements-dev.lock &&
+             python -m pip install -e . --no-deps &&
+             python -m launch_os_v11.runtime.worker_main"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  scheduler:
+    image: python:3.11-slim
+    profiles: ["runtime"]
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      LAUNCH_OS_ENV: local
+      LAUNCH_OS_DATABASE_URL: postgresql+psycopg://launch_os_v11:launch_os_v11@postgres:5432/launch_os_v11
+      LAUNCH_OS_REDIS_URL: redis://redis:6379/0
+    command: >
+      sh -c "python -m pip install -r requirements-dev.lock &&
+             python -m pip install -e . --no-deps &&
+             python -m launch_os_v11.runtime.scheduler_main"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   launch_os_v11_pgdata:

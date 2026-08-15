@@ -22,9 +22,20 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 30
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 30
     env:
       LAUNCH_OS_TEST_DATABASE_URL: postgresql+psycopg://launch_os_v11:launch_os_v11@localhost:5432/launch_os_v11_test
       LAUNCH_OS_DATABASE_URL: postgresql+psycopg://launch_os_v11:launch_os_v11@localhost:5432/launch_os_v11_test
+      LAUNCH_OS_TEST_REDIS_URL: redis://localhost:6379/0
+      LAUNCH_OS_REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -41,4 +52,6 @@ jobs:
       - name: Test
         run: python -m pytest -m "not postgres"
       - name: PostgreSQL integration
-        run: python -m pytest -m postgres tests/integration
+        run: python -m pytest -m "postgres and not runtime" tests/integration
+      - name: Runtime PostgreSQL Redis
+        run: python -m pytest -m runtime tests/integration
