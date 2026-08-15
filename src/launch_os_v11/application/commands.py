@@ -161,6 +161,9 @@ def create_business(
         object_type="Business",
         object_id=business.id,
     )
+    # The canonical session factory disables autoflush; command side effects must still
+    # be persistent and query-visible inside the surrounding transaction before return.
+    session.flush()
     return CommandResult(record=business, event=event)
 
 

@@ -3,6 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from launch_os_v11.application.approval_preflight import validate_approval_for_action
+from launch_os_v11.application.commands import create_business, create_organization
 from launch_os_v11.domain.entities import Asset, AssetVersion, Decision
 from launch_os_v11.domain.enums import (
     ActionStatus,
@@ -45,6 +46,39 @@ def test_business_snapshot_repository_is_append_only(session: Session) -> None:
     method_name = "update_fields"
     with pytest.raises(AttributeError):
         getattr(repository, method_name)(snapshot.id, reason="mutated")
+
+
+def test_create_business_flushes_side_effect_rows_before_return(
+    session: Session,
+) -> None:
+    organization = create_organization(session, name="Autoflush Boundary Org")
+
+    result = create_business(
+        session,
+        organization_id=organization.id,
+        name="Autoflush Boundary Business",
+        timezone="UTC",
+        actor_user_id=None,
+        correlation_id="autoflush-boundary",
+    )
+
+    assert result.record.organization_id == organization.id
+    assert (
+        session.scalar(
+            select(models.OutboxEventModel).where(
+                models.OutboxEventModel.correlation_id == "autoflush-boundary"
+            )
+        )
+        is not None
+    )
+    assert (
+        session.scalar(
+            select(models.AuditLogModel).where(
+                models.AuditLogModel.correlation_id == "autoflush-boundary"
+            )
+        )
+        is not None
+    )
 
 
 def test_append_only_history_repositories_do_not_expose_update_or_delete(session: Session) -> None:

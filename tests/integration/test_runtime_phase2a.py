@@ -34,7 +34,7 @@ from launch_os_v11.runtime.repositories import (
 )
 from launch_os_v11.runtime.scheduler import RuntimeScheduler
 from launch_os_v11.runtime.transport import RedisJobQueue
-from launch_os_v11.runtime.worker import Worker
+from launch_os_v11.runtime.worker import JobAttemptResult, Worker
 
 pytestmark = [pytest.mark.postgres, pytest.mark.runtime]
 
@@ -72,8 +72,10 @@ def _seed_scope(factory: sessionmaker[Session]) -> TenantScope:
                 actor_user_id=None,
                 correlation_id="runtime-seed",
             ).record
+            session.flush()
             for outbox in session.scalars(select(OutboxEventModel)).all():
                 outbox.status = OutboxStatus.PUBLISHED.value
+            session.flush()
         return TenantScope(
             organization_id=organization.id,
             business_id=business.id,
@@ -125,6 +127,29 @@ def _assert_queue_empty(redis_client: Redis, queue: RedisJobQueue) -> None:
     assert redis_client.llen(queue.queue_name) == 0
 
 
+def _process_expected_job(
+    worker: Worker,
+    *,
+    expected_job_id: str,
+    timeout_seconds: int = 1,
+    max_messages: int = 10,
+) -> JobAttemptResult:
+    seen: list[tuple[str, str, bool]] = []
+    for _ in range(max_messages):
+        result = worker.process_one_from_queue(timeout_seconds=timeout_seconds)
+        assert result is not None, (
+            f"expected job {expected_job_id} was not delivered; "
+            f"seen deliveries: {seen}"
+        )
+        seen.append((result.job_id, result.status, result.claimed))
+        if result.job_id == expected_job_id:
+            return result
+    pytest.fail(
+        f"expected job {expected_job_id} was not delivered within "
+        f"{max_messages} messages; seen deliveries: {seen}"
+    )
+
+
 def test_phase2a_postgresql_redis_runtime_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     database_url = _database_url()
     redis_url = _redis_url()
@@ -162,8 +187,7 @@ def test_phase2a_postgresql_redis_runtime_gate(monkeypatch: pytest.MonkeyPatch) 
             causation_id="cause-success",
         )
         queue.enqueue(success_job_id)
-        result = worker.process_one_from_queue(timeout_seconds=1)
-        assert result is not None
+        result = _process_expected_job(worker, expected_job_id=success_job_id)
         assert result.claimed
         assert result.status == JobStatus.SUCCEEDED.value
         session = factory()
@@ -232,8 +256,12 @@ def test_phase2a_postgresql_redis_runtime_gate(monkeypatch: pytest.MonkeyPatch) 
         )
         queue.enqueue(duplicate_job_id)
         queue.enqueue(duplicate_job_id)
-        assert worker.process_one_from_queue(timeout_seconds=1).status == JobStatus.SUCCEEDED.value  # type: ignore[union-attr]
-        assert worker.process_one_from_queue(timeout_seconds=1).claimed is False  # type: ignore[union-attr]
+        duplicate_result = _process_expected_job(worker, expected_job_id=duplicate_job_id)
+        assert duplicate_result.status == JobStatus.SUCCEEDED.value
+        duplicate_redelivery = worker.process_one_from_queue(timeout_seconds=1)
+        assert duplicate_redelivery is not None
+        assert duplicate_redelivery.job_id == duplicate_job_id
+        assert duplicate_redelivery.claimed is False
         session = factory()
         try:
             assert _job(session, duplicate_job_id).attempt_count == 1
@@ -257,7 +285,8 @@ def test_phase2a_postgresql_redis_runtime_gate(monkeypatch: pytest.MonkeyPatch) 
             correlation_id="corr-retry",
         )
         queue.enqueue(retry_job_id)
-        assert worker.process_one_from_queue(timeout_seconds=1).status == JobStatus.RETRY_WAIT.value  # type: ignore[union-attr]
+        retry_result = _process_expected_job(worker, expected_job_id=retry_job_id)
+        assert retry_result.status == JobStatus.RETRY_WAIT.value
         session = factory()
         try:
             retry_job = _job(session, retry_job_id)
@@ -278,8 +307,11 @@ def test_phase2a_postgresql_redis_runtime_gate(monkeypatch: pytest.MonkeyPatch) 
         clock.advance(timedelta(seconds=60))
         scheduler = RuntimeScheduler(session_factory=factory, queue=queue, clock=clock)
         scheduled = scheduler.run_once()
-        assert scheduled.due_jobs_enqueued >= 1
-        assert worker.process_one_from_queue(timeout_seconds=1).status == JobStatus.SUCCEEDED.value  # type: ignore[union-attr]
+        assert scheduled.outbox_jobs_enqueued == 0
+        assert scheduled.due_jobs_enqueued == 1
+        retry_success = _process_expected_job(worker, expected_job_id=retry_job_id)
+        assert retry_success.status == JobStatus.SUCCEEDED.value
+        _assert_queue_empty(redis_client, queue)
 
         permanent_job_id = _create_probe_job(
             factory,
@@ -289,7 +321,8 @@ def test_phase2a_postgresql_redis_runtime_gate(monkeypatch: pytest.MonkeyPatch) 
             payload={"outcome": "permanent"},
         )
         queue.enqueue(permanent_job_id)
-        assert worker.process_one_from_queue(timeout_seconds=1).status == JobStatus.FAILED.value  # type: ignore[union-attr]
+        permanent_result = _process_expected_job(worker, expected_job_id=permanent_job_id)
+        assert permanent_result.status == JobStatus.FAILED.value
 
         max_attempt_job_id = _create_probe_job(
             factory,
@@ -300,7 +333,8 @@ def test_phase2a_postgresql_redis_runtime_gate(monkeypatch: pytest.MonkeyPatch) 
             max_attempts=1,
         )
         queue.enqueue(max_attempt_job_id)
-        assert worker.process_one_from_queue(timeout_seconds=1).status == JobStatus.FAILED.value  # type: ignore[union-attr]
+        max_attempt_result = _process_expected_job(worker, expected_job_id=max_attempt_job_id)
+        assert max_attempt_result.status == JobStatus.FAILED.value
 
         lease_job_id = _create_probe_job(
             factory,
@@ -382,7 +416,8 @@ def test_phase2a_postgresql_redis_runtime_gate(monkeypatch: pytest.MonkeyPatch) 
             correlation_id="corr-rollback",
         )
         queue.enqueue(rollback_job_id)
-        assert worker.process_one_from_queue(timeout_seconds=1).status == JobStatus.RETRY_WAIT.value  # type: ignore[union-attr]
+        rollback_result = _process_expected_job(worker, expected_job_id=rollback_job_id)
+        assert rollback_result.status == JobStatus.RETRY_WAIT.value
         session = factory()
         try:
             assert (
@@ -404,7 +439,8 @@ def test_phase2a_postgresql_redis_runtime_gate(monkeypatch: pytest.MonkeyPatch) 
             payload={"escape_scope": True},
         )
         queue.enqueue(escape_job_id)
-        assert worker.process_one_from_queue(timeout_seconds=1).status == JobStatus.FAILED.value  # type: ignore[union-attr]
+        escape_result = _process_expected_job(worker, expected_job_id=escape_job_id)
+        assert escape_result.status == JobStatus.FAILED.value
         session = factory()
         try:
             assert _job(session, escape_job_id).error_class == "TenantScopeViolation"
@@ -442,7 +478,8 @@ def test_phase2a_postgresql_redis_runtime_gate(monkeypatch: pytest.MonkeyPatch) 
             payload={"outcome": "permanent_secret_error"},
         )
         queue.enqueue(redaction_job_id)
-        worker.process_one_from_queue(timeout_seconds=1)
+        redaction_result = _process_expected_job(worker, expected_job_id=redaction_job_id)
+        assert redaction_result.status == JobStatus.FAILED.value
         session = factory()
         try:
             redaction_job = _job(session, redaction_job_id)
