@@ -187,7 +187,10 @@ _REFERENCE_POLICY: dict[type[object], tuple[tuple[str, type[Any]], ...]] = {
         ("approval_id", models.ApprovalModel),
     ),
     models.BusinessEventModel: (("source_record_id", models.SourceRecordModel),),
-    models.AgentRunModel: (("agent_definition_id", models.AgentDefinitionModel),),
+    models.AgentRunModel: (
+        ("agent_definition_id", models.AgentDefinitionModel),
+        ("job_id", models.JobModel),
+    ),
     models.LearningModel: (
         ("decision_id", models.DecisionModel),
         ("experiment_id", models.ExperimentModel),

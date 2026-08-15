@@ -52,6 +52,8 @@ jobs:
       - name: Test
         run: python -m pytest -m "not postgres"
       - name: PostgreSQL integration
-        run: python -m pytest -m "postgres and not runtime" tests/integration
+        run: python -m pytest -m "postgres and not runtime and not ai_runtime" tests/integration
       - name: Runtime PostgreSQL Redis
         run: python -m pytest -m runtime tests/integration
+      - name: AI Runtime PostgreSQL Redis
+        run: python -m pytest -m ai_runtime tests/integration

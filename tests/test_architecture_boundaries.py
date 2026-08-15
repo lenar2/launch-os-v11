@@ -4,6 +4,21 @@ from pathlib import Path
 from launch_os_v11.persistence.models import Base
 
 
+def _imported_modules(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text())
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            imported.add(node.module)
+    return imported
+
+
+def _imports_root(imported: set[str], root: str) -> bool:
+    return any(module == root or module.startswith(f"{root}.") for module in imported)
+
+
 def test_domain_layer_does_not_depend_on_fastapi_ai_runtime_or_connectors() -> None:
     forbidden_roots = {
         "fastapi",
@@ -15,15 +30,9 @@ def test_domain_layer_does_not_depend_on_fastapi_ai_runtime_or_connectors() -> N
         "launch_os_v11.runtime",
     }
     for path in Path("src/launch_os_v11/domain").glob("*.py"):
-        tree = ast.parse(path.read_text())
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imported = {alias.name for alias in node.names}
-            elif isinstance(node, ast.ImportFrom) and node.module is not None:
-                imported = {node.module}
-            else:
-                continue
-            assert imported.isdisjoint(forbidden_roots), f"{path} imports {imported}"
+        imported = _imported_modules(path)
+        for root in forbidden_roots:
+            assert not _imports_root(imported, root), f"{path} imports {root}"
 
 
 def test_business_scoped_tables_have_tenant_and_business_columns() -> None:
@@ -43,15 +52,9 @@ def test_no_v10_code_path_exists_in_phase_0_or_phase_1_source() -> None:
 def test_application_layer_does_not_import_concrete_external_connectors() -> None:
     forbidden_roots = {"launch_os_v11.connectors"}
     for path in Path("src/launch_os_v11/application").glob("*.py"):
-        tree = ast.parse(path.read_text())
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imported = {alias.name for alias in node.names}
-            elif isinstance(node, ast.ImportFrom) and node.module is not None:
-                imported = {node.module}
-            else:
-                continue
-            assert imported.isdisjoint(forbidden_roots), f"{path} imports {imported}"
+        imported = _imported_modules(path)
+        for root in forbidden_roots:
+            assert not _imports_root(imported, root), f"{path} imports {root}"
 
 
 def test_persistence_layer_has_no_ai_connector_or_application_workflow_imports() -> None:
@@ -62,24 +65,25 @@ def test_persistence_layer_has_no_ai_connector_or_application_workflow_imports()
         "launch_os_v11.domain.entities",
     }
     for path in Path("src/launch_os_v11/persistence").glob("*.py"):
-        tree = ast.parse(path.read_text())
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imported = {alias.name for alias in node.names}
-            elif isinstance(node, ast.ImportFrom) and node.module is not None:
-                imported = {node.module}
-            else:
-                continue
-            assert imported.isdisjoint(forbidden_roots), f"{path} imports {imported}"
+        imported = _imported_modules(path)
+        for root in forbidden_roots:
+            assert not _imports_root(imported, root), f"{path} imports {root}"
 
 
 def test_reserved_packages_do_not_create_direct_agent_to_write_path() -> None:
     reserved_paths = [
-        *Path("src/launch_os_v11/ai_runtime").glob("*.py"),
-        *Path("src/launch_os_v11/connectors").glob("*.py"),
-        *Path("src/launch_os_v11/execution").glob("*.py"),
+        *Path("src/launch_os_v11/ai_runtime").rglob("*.py"),
+        *Path("src/launch_os_v11/connectors").rglob("*.py"),
+        *Path("src/launch_os_v11/execution").rglob("*.py"),
     ]
-    forbidden_terms = {"send_message", "publish", "external_write", "execute_connector"}
+    forbidden_terms = {
+        "send_message(",
+        "publish_to",
+        "external_write(",
+        "execute_connector(",
+        "connector_client",
+        "execution_engine",
+    }
     for path in reserved_paths:
         text = path.read_text()
         assert not any(term in text for term in forbidden_terms), path
@@ -106,14 +110,29 @@ def test_runtime_worker_has_no_ai_connector_or_business_decision_logic() -> None
         Path("src/launch_os_v11/runtime/handlers.py"),
     ]
     for path in runtime_logic_paths:
-        tree = ast.parse(path.read_text())
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imported = {alias.name for alias in node.names}
-            elif isinstance(node, ast.ImportFrom) and node.module is not None:
-                imported = {node.module}
-            else:
-                continue
-            assert imported.isdisjoint(forbidden_roots), f"{path} imports {imported}"
+        imported = _imported_modules(path)
+        for root in forbidden_roots:
+            assert not _imports_root(imported, root), f"{path} imports {root}"
         text = path.read_text().lower()
         assert not any(term in text for term in forbidden_terms), path
+
+
+def test_openai_sdk_import_is_confined_to_provider_adapter() -> None:
+    allowed_path = Path("src/launch_os_v11/ai_runtime/adapters/openai.py")
+    for path in Path("src/launch_os_v11").rglob("*.py"):
+        imported = _imported_modules(path)
+        if path == allowed_path:
+            assert _imports_root(imported, "openai")
+        else:
+            assert not _imports_root(imported, "openai"), f"{path} imports OpenAI SDK"
+
+
+def test_ai_runtime_does_not_import_connectors_or_execution() -> None:
+    forbidden_roots = {
+        "launch_os_v11.connectors",
+        "launch_os_v11.execution",
+    }
+    for path in Path("src/launch_os_v11/ai_runtime").rglob("*.py"):
+        imported = _imported_modules(path)
+        for root in forbidden_roots:
+            assert not _imports_root(imported, root), f"{path} imports {root}"

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import timedelta
 from typing import Protocol
 
 from sqlalchemy.orm import Session
 
 from launch_os_v11.domain.enums import OutboxStatus
-from launch_os_v11.persistence.models import BusinessEventModel, OutboxEventModel
+from launch_os_v11.persistence.models import BusinessEventModel, JobModel, OutboxEventModel
 from launch_os_v11.runtime.clock import Clock
 from launch_os_v11.runtime.contracts import (
     JOB_TYPE_OUTBOX_DISPATCH,
@@ -27,6 +28,20 @@ class JobHandler(Protocol):
         clock: Clock,
     ) -> None:
         """Run one idempotent attempt inside the worker attempt transaction."""
+
+
+class AttemptFailureRecorder(Protocol):
+    def record_attempt_failure(
+        self,
+        *,
+        session: Session,
+        job: JobModel,
+        error: BaseException,
+        will_retry: bool,
+        clock: Clock,
+        retry_backoff: timedelta,
+    ) -> None:
+        """Persist handler-owned failure state in the worker failure transaction."""
 
 
 class OutboxDispatchHandler:

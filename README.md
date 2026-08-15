@@ -20,8 +20,11 @@ Start here:
 Current implementation posture:
 
 - Architecture: ready.
-- Codebase creation: ready for v11.1 vertical-slice scaffolding.
-- Broad feature implementation: not yet.
+- Phase 0/1 domain and persistence foundation: implemented.
+- Phase 2A durable async runtime: implemented.
+- Phase 2B governed AI runtime foundation: implemented behind explicit runtime
+  contracts and fake-adapter CI coverage.
+- Phase 3 business decision workflow and broad product features: not yet.
 
 First build target:
 
@@ -48,6 +51,11 @@ Run PostgreSQL 16 integration checks with Docker:
 Run Phase 2A PostgreSQL + Redis runtime integration checks with Docker:
 
 `make test-runtime`
+
+Run Phase 2B governed AI runtime PostgreSQL + Redis integration checks with
+Docker and the deterministic fake adapter:
+
+`make test-ai-runtime`
 
 Run migrations locally against the configured `LAUNCH_OS_DATABASE_URL`:
 

@@ -173,7 +173,8 @@ def test_phase2a_postgresql_redis_runtime_gate(monkeypatch: pytest.MonkeyPatch) 
     )
 
     try:
-        assert "ai.run_agent" in RESERVED_JOB_TYPES
+        assert "ai.run_controller" in RESERVED_JOB_TYPES
+        assert "ai.run_agent" not in RESERVED_JOB_TYPES
         _assert_job_schema(engine)
         scope = _seed_scope(factory)
 

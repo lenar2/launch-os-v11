@@ -157,6 +157,7 @@ EXPECTED_FOREIGN_KEYS: set[ForeignKeyPair] = (
         ("executions", "approval_id", "approvals", "id"),
         ("business_events", "source_record_id", "source_records", "id"),
         ("agent_runs", "agent_definition_id", "agent_definitions", "id"),
+        ("agent_runs", "job_id", "jobs", "id"),
         ("learnings", "decision_id", "decisions", "id"),
         ("learnings", "experiment_id", "experiments", "id"),
     }
@@ -218,6 +219,43 @@ def _assert_schema_contract(database_url: str) -> None:
             constraint["name"] for constraint in inspector.get_check_constraints("actions")
         }
         assert "ck_actions_target_object_version_positive" in action_checks
+
+        agent_definition_indexes = {
+            index["name"] for index in inspector.get_indexes("agent_definitions")
+        }
+        assert "ix_agent_definitions_contract_key" in agent_definition_indexes
+        assert "ix_agent_definitions_contract_fingerprint" in agent_definition_indexes
+        agent_definition_uniques = {
+            tuple(constraint["column_names"])
+            for constraint in inspector.get_unique_constraints("agent_definitions")
+        }
+        assert (
+            "organization_id",
+            "business_id",
+            "contract_key",
+            "contract_version",
+        ) in agent_definition_uniques
+        agent_definition_checks = {
+            constraint["name"]
+            for constraint in inspector.get_check_constraints("agent_definitions")
+        }
+        assert "ck_agent_definitions_contract_version_positive" in agent_definition_checks
+        assert (
+            "ck_agent_definitions_output_schema_version_positive"
+            in agent_definition_checks
+        )
+
+        agent_run_indexes = {index["name"] for index in inspector.get_indexes("agent_runs")}
+        assert "ix_agent_runs_job_id" in agent_run_indexes
+        assert "ix_agent_runs_context_hash" in agent_run_indexes
+        assert "ix_agent_runs_provider_response_id" in agent_run_indexes
+        agent_run_checks = {
+            constraint["name"] for constraint in inspector.get_check_constraints("agent_runs")
+        }
+        assert "ck_agent_runs_status_phase2b" in agent_run_checks
+        assert "ck_agent_runs_payload_schema_positive" in agent_run_checks
+        assert "ck_agent_runs_contract_version_positive" in agent_run_checks
+        assert "ck_agent_runs_output_schema_version_positive" in agent_run_checks
     finally:
         engine.dispose()
 

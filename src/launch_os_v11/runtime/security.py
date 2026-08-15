@@ -16,6 +16,13 @@ SECRET_KEY_FRAGMENTS = (
     "token",
 )
 
+SAFE_TELEMETRY_KEYS = {
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "token_usage",
+}
+
 SECRET_ASSIGNMENT = re.compile(
     r"(?i)(api[_-]?key|credential|password|private[_-]?key|secret|token)\s*=\s*[^,\s;]+"
 )
@@ -26,7 +33,9 @@ def assert_no_secrets(value: Any, *, path: str = "payload") -> None:
         for raw_key, item in value.items():
             key = str(raw_key)
             lowered = key.lower()
-            if any(fragment in lowered for fragment in SECRET_KEY_FRAGMENTS):
+            if lowered not in SAFE_TELEMETRY_KEYS and any(
+                fragment in lowered for fragment in SECRET_KEY_FRAGMENTS
+            ):
                 raise SecretRejectedError(f"secret-like key rejected at {path}.{key}")
             assert_no_secrets(item, path=f"{path}.{key}")
         return

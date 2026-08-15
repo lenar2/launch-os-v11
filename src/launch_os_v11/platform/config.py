@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     )
     redis_url: str = Field(default="redis://localhost:6379/0", alias="LAUNCH_OS_REDIS_URL")
     log_level: str = Field(default="INFO", alias="LAUNCH_OS_LOG_LEVEL")
+    ai_team_enabled: bool = Field(default=False, alias="LAUNCH_OS_FEATURE_V11_AI_TEAM")
+    ai_model_provider: str | None = Field(default=None, alias="LAUNCH_OS_AI_MODEL_PROVIDER")
+    ai_openai_text_model: str | None = Field(
+        default=None,
+        alias="LAUNCH_OS_AI_OPENAI_TEXT_MODEL",
+    )
+    openai_api_key: SecretStr | None = Field(default=None, alias="OPENAI_API_KEY")
 
 
 @lru_cache

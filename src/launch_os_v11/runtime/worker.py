@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timedelta
 from threading import Event
+from typing import cast
 
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -13,7 +14,11 @@ from launch_os_v11.persistence.models import JobModel
 from launch_os_v11.runtime.clock import Clock, SystemClock
 from launch_os_v11.runtime.contracts import RuntimeJobContext
 from launch_os_v11.runtime.errors import PermanentJobError, TransientJobError
-from launch_os_v11.runtime.handlers import JobHandler, default_handler_registry
+from launch_os_v11.runtime.handlers import (
+    AttemptFailureRecorder,
+    JobHandler,
+    default_handler_registry,
+)
 from launch_os_v11.runtime.repositories import (
     claim_job,
     mark_job_failed_or_retrying,
@@ -122,6 +127,20 @@ class Worker:
         retry: bool,
     ) -> JobAttemptResult:
         with self._session_factory() as session, session.begin():
+            existing_job = session.get(JobModel, job_id)
+            if existing_job is not None:
+                will_retry = retry and existing_job.attempt_count < existing_job.max_attempts
+                handler = self._handlers.get(existing_job.job_type)
+                recorder = getattr(handler, "record_attempt_failure", None)
+                if callable(recorder):
+                    cast(AttemptFailureRecorder, handler).record_attempt_failure(
+                        session=session,
+                        job=existing_job,
+                        error=error,
+                        will_retry=will_retry,
+                        clock=self._clock,
+                        retry_backoff=self._retry_backoff,
+                    )
             job = mark_job_failed_or_retrying(
                 session,
                 job_id=job_id,

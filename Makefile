@@ -3,7 +3,7 @@ export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
 PYTHON ?= python3
 
-.PHONY: install lint type test test-migrations test-postgres test-runtime check migrate downgrade run-api
+.PHONY: install lint type test test-migrations test-postgres test-runtime test-ai-runtime check migrate downgrade run-api
 
 install:
 	$(PYTHON) -m pip install -e ".[dev]"
@@ -21,10 +21,13 @@ test-migrations:
 	$(PYTHON) -m pytest tests/test_migrations.py
 
 test-postgres:
-	./scripts/run_postgres_integration.sh
+	PYTHON="$(PYTHON)" ./scripts/run_postgres_integration.sh
 
 test-runtime:
-	./scripts/run_runtime_integration.sh
+	PYTHON="$(PYTHON)" ./scripts/run_runtime_integration.sh
+
+test-ai-runtime:
+	PYTHON="$(PYTHON)" ./scripts/run_ai_runtime_integration.sh
 
 check: lint type test
 

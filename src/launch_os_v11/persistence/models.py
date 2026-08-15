@@ -583,24 +583,98 @@ class JobModel(BusinessScopedMixin, Base):
 
 class AgentDefinitionModel(BusinessScopedMixin, Base):
     __tablename__ = "agent_definitions"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "business_id",
+            "contract_key",
+            "contract_version",
+            name="uq_agent_definitions_contract_version",
+        ),
+        CheckConstraint(
+            "contract_version >= 1",
+            name="ck_agent_definitions_contract_version_positive",
+        ),
+        CheckConstraint(
+            "output_schema_version >= 1",
+            name="ck_agent_definitions_output_schema_version_positive",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     mission: Mapped[str] = mapped_column(Text, nullable=False)
     output_schema: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    contract_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    contract_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    role_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    model_capability: Mapped[str] = mapped_column(String(128), nullable=False)
+    allowed_context_types: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    required_context_types: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    authority_boundaries: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    prohibited_actions: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    required_controller_types: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    abstention_policy: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    escalation_policy: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    instruction_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    eval_suite_identifier: Mapped[str] = mapped_column(String(128), nullable=False)
+    contract_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    output_schema_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    output_schema_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
 
 class AgentRunModel(BusinessScopedMixin, Base):
     __tablename__ = "agent_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('QUEUED', 'RUNNING', 'RETRY_WAIT', 'SUCCEEDED', "
+            "'REFUSED', 'INVALID_OUTPUT', 'FAILED')",
+            name="ck_agent_runs_status_phase2b",
+        ),
+        CheckConstraint(
+            "payload_schema_version >= 1",
+            name="ck_agent_runs_payload_schema_positive",
+        ),
+        CheckConstraint(
+            "agent_contract_version >= 1",
+            name="ck_agent_runs_contract_version_positive",
+        ),
+        CheckConstraint(
+            "output_schema_version >= 1",
+            name="ck_agent_runs_output_schema_version_positive",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     agent_definition_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("agent_definitions.id"), nullable=False, index=True
     )
+    job_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("jobs.id"), index=True)
+    payload_schema_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    agent_contract_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    agent_contract_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    agent_contract_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_schema_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    output_schema_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     input_ref: Mapped[str | None] = mapped_column(String(255))
     output_ref: Mapped[str | None] = mapped_column(String(255))
+    context_refs: Mapped[list[dict[str, str]]] = mapped_column(JSON, default=list, nullable=False)
+    context_manifest: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    context_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    output_data: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    refusal_summary: Mapped[str | None] = mapped_column(Text)
+    error_class: Mapped[str | None] = mapped_column(String(255))
+    error_summary: Mapped[str | None] = mapped_column(Text)
+    provider_name: Mapped[str | None] = mapped_column(String(64))
+    provider_model: Mapped[str | None] = mapped_column(String(255))
+    provider_response_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    token_usage: Mapped[dict[str, int]] = mapped_column(JSON, default=dict, nullable=False)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    safe_trace_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     correlation_id: Mapped[str | None] = mapped_column(String(64), index=True)
     causation_id: Mapped[str | None] = mapped_column(String(64), index=True)
 

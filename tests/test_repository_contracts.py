@@ -32,6 +32,81 @@ from launch_os_v11.persistence.repositories import (
 RowFactory: TypeAlias = Callable[[TenantScope, str, dict[str, str]], Any]
 
 
+def _agent_definition_model(
+    scope: TenantScope,
+    *,
+    suffix: str,
+    prefix: str,
+) -> models.AgentDefinitionModel:
+    contract_key = f"{prefix}.agent.{suffix}"
+    return models.AgentDefinitionModel(
+        id=f"{prefix}-agent-definition-{suffix}",
+        organization_id=scope.organization_id,
+        business_id=scope.business_id,
+        name="Reserved",
+        mission="Reserved only",
+        output_schema={
+            "title": "RuntimeProbeOutput",
+            "type": "object",
+            "additionalProperties": False,
+        },
+        enabled=False,
+        contract_key=contract_key,
+        contract_version=1,
+        role_name="Reserved",
+        model_capability="FAST_STRUCTURED_CLASSIFICATION",
+        allowed_context_types=["business"],
+        required_context_types=["business"],
+        authority_boundaries=[
+            "READ_SCOPED_CONTEXT_ONLY",
+            "NO_TOOLS",
+            "NO_CONNECTORS",
+            "NO_EXTERNAL_WRITES",
+            "NO_CREDENTIAL_ACCESS",
+        ],
+        prohibited_actions=[
+            "external write",
+            "connector access",
+            "credential access",
+        ],
+        required_controller_types=["none_phase2b"],
+        abstention_policy="Abstain when scoped context is insufficient.",
+        escalation_policy="Escalate without creating domain objects.",
+        instruction_version=f"{contract_key}.instructions.v1",
+        eval_suite_identifier=f"{contract_key}.eval.v1",
+        contract_fingerprint="a" * 64,
+        output_schema_name="RuntimeProbeOutput",
+        output_schema_version=1,
+    )
+
+
+def _agent_run_model(
+    scope: TenantScope,
+    *,
+    suffix: str,
+    prefix: str,
+    agent_definition_id: str,
+) -> models.AgentRunModel:
+    return models.AgentRunModel(
+        id=f"{prefix}-agent-run-{suffix}",
+        organization_id=scope.organization_id,
+        business_id=scope.business_id,
+        agent_definition_id=agent_definition_id,
+        job_id=None,
+        payload_schema_version=1,
+        agent_contract_key=f"dep.agent.{suffix}",
+        agent_contract_version=1,
+        agent_contract_fingerprint="a" * 64,
+        output_schema_name="RuntimeProbeOutput",
+        output_schema_version=1,
+        status=JobStatus.QUEUED.value,
+        context_refs=[],
+        context_manifest={},
+        token_usage={},
+        safe_trace_metadata={},
+    )
+
+
 def _seed_dependencies(session: Session, scope: TenantScope, suffix: str) -> dict[str, str]:
     now = utc_now()
     user = models.UserModel(
@@ -203,15 +278,7 @@ def _seed_dependencies(session: Session, scope: TenantScope, suffix: str) -> dic
         status=ApprovalStatus.APPROVED.value,
         created_at=now,
     )
-    agent_definition = models.AgentDefinitionModel(
-        id=f"dep-agent-definition-{suffix}",
-        organization_id=scope.organization_id,
-        business_id=scope.business_id,
-        name="Definition",
-        mission="Reserved only",
-        output_schema={},
-        enabled=False,
-    )
+    agent_definition = _agent_definition_model(scope, suffix=suffix, prefix="dep")
     session.add_all(
         [
             user,
@@ -695,25 +762,20 @@ def _row_factories() -> list[tuple[type[Any], RowFactory, bool]]:
         ),
         (
             models.AgentDefinitionModel,
-            lambda scope, suffix, dep: models.AgentDefinitionModel(
-                id=f"row-agent-definition-{suffix}",
-                organization_id=scope.organization_id,
-                business_id=scope.business_id,
-                name="Reserved",
-                mission="Reserved only",
-                output_schema={},
-                enabled=False,
+            lambda scope, suffix, dep: _agent_definition_model(
+                scope,
+                suffix=suffix,
+                prefix="row",
             ),
             True,
         ),
         (
             models.AgentRunModel,
-            lambda scope, suffix, dep: models.AgentRunModel(
-                id=f"row-agent-run-{suffix}",
-                organization_id=scope.organization_id,
-                business_id=scope.business_id,
+            lambda scope, suffix, dep: _agent_run_model(
+                scope,
+                suffix=suffix,
+                prefix="row",
                 agent_definition_id=dep["agent_definition"],
-                status=JobStatus.QUEUED.value,
             ),
             True,
         ),
