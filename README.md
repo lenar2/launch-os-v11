@@ -28,3 +28,27 @@ First build target:
 `CreateLaunch -> BusinessSnapshot -> Decision -> controllers -> checkpoint -> CreativeBrief -> Asset -> review -> Approval -> Telegram publication -> observed result -> metric update -> Learning -> next Decision`
 
 Do not expand broad modules until this loop closes in staging.
+
+## Development
+
+Install dependencies:
+
+`make install`
+
+Run checks:
+
+`make check`
+
+Run migrations locally against the configured `LAUNCH_OS_DATABASE_URL`:
+
+`make migrate`
+
+Rollback to base:
+
+`make downgrade`
+
+Run the API skeleton:
+
+`make run-api`
+
+Local PostgreSQL and Redis are described in `docker-compose.local.yml`. Staging-only compose is in `docker-compose.staging.yml`. No production compose or production secrets are present.

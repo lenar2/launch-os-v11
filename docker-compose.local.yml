@@ -1,0 +1,31 @@
+name: launch-os-v11-local
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: launch_os_v11
+      POSTGRES_USER: launch_os_v11
+      POSTGRES_PASSWORD: launch_os_v11
+    ports:
+      - "5432:5432"
+    volumes:
+      - launch_os_v11_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U launch_os_v11 -d launch_os_v11"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  launch_os_v11_pgdata:

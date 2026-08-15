@@ -36,6 +36,7 @@ This repository is the source of truth for Launch OS v11 implementation. Before 
 - Keep tests focused on domain behavior, permissions, controller gates, connector normalization, deterministic analytics, and workflow closure.
 - Keep platform billing/usage data separate from the customer business commerce model.
 - Secrets must not appear in prompts, traces, fixtures, logs, docs, or screenshots.
+- Current required local checks are `make check`, `make test-migrations`, `make migrate`, and `make downgrade`.
 
 ## Required Checks Before Broad Feature Work
 

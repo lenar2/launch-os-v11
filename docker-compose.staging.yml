@@ -1,0 +1,35 @@
+name: launch-os-v11-staging
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-launch_os_v11_staging}
+      POSTGRES_USER: ${POSTGRES_USER:-launch_os_v11}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD for staging}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - launch_os_v11_staging_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-launch_os_v11} -d ${POSTGRES_DB:-launch_os_v11_staging}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - launch_os_v11_staging_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  launch_os_v11_staging_pgdata:
+  launch_os_v11_staging_redis:
