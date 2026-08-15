@@ -114,16 +114,19 @@ def test_approval_is_bound_to_exact_object_version_and_action() -> None:
         organization_id="org-a",
         business_id="biz-a",
         action_type="publish",
-        target_object_type="AssetVersion",
-        target_object_id="asset-version-1",
+        target_object_type="Asset",
+        target_object_id="asset-1",
+        target_object_version_id="asset-version-1",
         target_object_version=1,
     )
     approval = Approval(
         organization_id="org-a",
         business_id="biz-a",
         action_id=action.id,
+        action_type=action.action_type,
         object_type=action.target_object_type,
         object_id=action.target_object_id,
+        object_version_id=action.target_object_version_id,
         object_version=action.target_object_version,
         approved_by_user_id="user-1",
         status=ApprovalStatus.APPROVED,
@@ -131,21 +134,27 @@ def test_approval_is_bound_to_exact_object_version_and_action() -> None:
 
     assert approval.is_valid_for(
         action_id=action.id,
-        object_type="AssetVersion",
-        object_id="asset-version-1",
+        action_type="publish",
+        object_type="Asset",
+        object_id="asset-1",
+        object_version_id="asset-version-1",
         object_version=1,
     )
     assert not approval.is_valid_for(
         action_id=action.id,
-        object_type="AssetVersion",
-        object_id="asset-version-1",
+        action_type="publish",
+        object_type="Asset",
+        object_id="asset-1",
+        object_version_id="asset-version-2",
         object_version=2,
     )
     with pytest.raises(ApprovalBindingError):
         approval.assert_valid_for(
             action_id=action.id,
-            object_type="AssetVersion",
-            object_id="asset-version-1",
+            action_type="publish",
+            object_type="Asset",
+            object_id="asset-1",
+            object_version_id="asset-version-2",
             object_version=2,
         )
 

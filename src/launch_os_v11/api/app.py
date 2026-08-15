@@ -1,11 +1,14 @@
 from fastapi import FastAPI
-from sqlalchemy import text
+from fastapi.responses import JSONResponse
 
-from launch_os_v11.persistence.session import create_engine_from_settings
+from launch_os_v11.api.readiness import ReadinessChecker, check_database_readiness
 from launch_os_v11.platform.config import Settings, get_settings
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    readiness_checker: ReadinessChecker = check_database_readiness,
+) -> FastAPI:
     runtime_settings = settings or get_settings()
     app = FastAPI(
         title="Launch OS v11",
@@ -19,16 +22,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/health/ready")
-    def ready() -> dict[str, str]:
-        if not runtime_settings.enable_db_healthcheck:
-            return {"status": "ok", "database": "not_checked"}
-
-        engine = create_engine_from_settings(runtime_settings)
-        try:
-            with engine.connect() as connection:
-                connection.execute(text("select 1"))
-        finally:
-            engine.dispose()
-        return {"status": "ok", "database": "ok"}
+    def ready() -> JSONResponse:
+        readiness = readiness_checker(runtime_settings)
+        status_code = 200 if readiness.ready else 503
+        status = "ok" if readiness.ready else "not_ready"
+        payload = {
+            "status": status,
+            "database": readiness.database,
+            "detail": readiness.detail,
+            "migration_version": readiness.migration_version,
+            "expected_migration_version": readiness.expected_migration_version,
+        }
+        return JSONResponse(status_code=status_code, content=payload)
 
     return app

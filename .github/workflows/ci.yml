@@ -8,16 +8,37 @@ on:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: launch_os_v11_test
+          POSTGRES_USER: launch_os_v11
+          POSTGRES_PASSWORD: launch_os_v11
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U launch_os_v11 -d launch_os_v11_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      LAUNCH_OS_TEST_DATABASE_URL: postgresql+psycopg://launch_os_v11:launch_os_v11@localhost:5432/launch_os_v11_test
+      LAUNCH_OS_DATABASE_URL: postgresql+psycopg://launch_os_v11:launch_os_v11@localhost:5432/launch_os_v11_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
       - name: Install
-        run: python -m pip install -e ".[dev]"
+        run: |
+          python -m pip install -r requirements-dev.lock
+          python -m pip install -e . --no-deps
       - name: Lint
         run: python -m ruff check .
       - name: Type check
         run: python -m mypy
       - name: Test
         run: python -m pytest
+      - name: PostgreSQL integration
+        run: python -m pytest -m postgres tests/integration

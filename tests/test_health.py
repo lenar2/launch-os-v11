@@ -1,18 +1,68 @@
-from fastapi.testclient import TestClient
+import anyio
+import httpx
 
 from launch_os_v11.api.app import create_app
+from launch_os_v11.api.readiness import ReadinessResult
 from launch_os_v11.platform.config import Settings
 
 
-def test_health_endpoints() -> None:
+async def _get_json(app, path: str) -> tuple[int, dict[str, object]]:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(path)
+    return response.status_code, response.json()
+
+
+def test_live_endpoint_only_checks_process_liveness() -> None:
+    app = create_app(
+        Settings(
+            LAUNCH_OS_ENV="test",
+            LAUNCH_OS_DATABASE_URL="postgresql+psycopg://localhost/test",
+        )
+    )
+
+    status_code, payload = anyio.run(_get_json, app, "/health/live")
+
+    assert status_code == 200
+    assert payload == {"status": "ok"}
+
+
+def test_ready_endpoint_returns_200_when_database_gate_passes() -> None:
+    def ready_checker(_: Settings) -> ReadinessResult:
+        return ReadinessResult(
+            ready=True,
+            database="ok",
+            detail="ready",
+            migration_version="0001_initial_domain_core",
+            expected_migration_version="0001_initial_domain_core",
+        )
+
+    app = create_app(
+        Settings(
+            LAUNCH_OS_ENV="test",
+            LAUNCH_OS_DATABASE_URL="postgresql+psycopg://localhost/test",
+        ),
+        readiness_checker=ready_checker,
+    )
+
+    status_code, payload = anyio.run(_get_json, app, "/health/ready")
+
+    assert status_code == 200
+    assert payload["status"] == "ok"
+    assert payload["database"] == "ok"
+    assert payload["migration_version"] == "0001_initial_domain_core"
+
+
+def test_ready_endpoint_returns_503_when_database_is_not_checked_or_not_postgres() -> None:
     app = create_app(
         Settings(
             LAUNCH_OS_ENV="test",
             LAUNCH_OS_DATABASE_URL="sqlite:///:memory:",
-            LAUNCH_OS_ENABLE_DB_HEALTHCHECK=False,
         )
     )
-    client = TestClient(app)
 
-    assert client.get("/health/live").json() == {"status": "ok"}
-    assert client.get("/health/ready").json() == {"status": "ok", "database": "not_checked"}
+    status_code, payload = anyio.run(_get_json, app, "/health/ready")
+
+    assert status_code == 503
+    assert payload["status"] == "not_ready"
+    assert payload["database"] == "not_postgresql"

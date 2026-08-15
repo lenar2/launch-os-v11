@@ -425,8 +425,10 @@ def approve_action(
         organization_id=context.organization_id,
         business_id=context.business_id,
         action_id=action.id,
+        action_type=action.action_type,
         object_type=action.target_object_type,
         object_id=action.target_object_id,
+        object_version_id=action.target_object_version_id,
         object_version=action.target_object_version,
         approved_by_user_id=approved_by_user_id,
         status=ApprovalStatus.APPROVED.value,
@@ -441,8 +443,10 @@ def approve_action(
         aggregate_id=approval.id,
         payload={
             "action_id": action.id,
+            "action_type": approval.action_type,
             "object_type": approval.object_type,
             "object_id": approval.object_id,
+            "object_version_id": approval.object_version_id,
             "object_version": approval.object_version,
         },
     )

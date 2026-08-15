@@ -12,13 +12,14 @@ class Settings(BaseSettings):
         default="local", alias="LAUNCH_OS_ENV"
     )
     database_url: str = Field(
-        default="sqlite:///./.local/launch_os_v11.db", alias="LAUNCH_OS_DATABASE_URL"
+        default=(
+            "postgresql+psycopg://launch_os_v11:launch_os_v11@localhost:5432/"
+            "launch_os_v11"
+        ),
+        alias="LAUNCH_OS_DATABASE_URL",
     )
     redis_url: str = Field(default="redis://localhost:6379/0", alias="LAUNCH_OS_REDIS_URL")
     log_level: str = Field(default="INFO", alias="LAUNCH_OS_LOG_LEVEL")
-    enable_db_healthcheck: bool = Field(
-        default=False, alias="LAUNCH_OS_ENABLE_DB_HEALTHCHECK"
-    )
 
 
 @lru_cache

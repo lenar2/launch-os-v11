@@ -442,6 +442,7 @@ class Action(VersionedBusinessObject):
     action_type: str = ""
     target_object_type: str = ""
     target_object_id: str = ""
+    target_object_version_id: str = ""
     target_object_version: int = 1
     status: ActionStatus = ActionStatus.PROPOSED
     idempotency_key: str = field(default_factory=new_id)
@@ -452,8 +453,10 @@ class Approval:
     organization_id: str
     business_id: str
     action_id: str
+    action_type: str
     object_type: str
     object_id: str
+    object_version_id: str
     object_version: int
     approved_by_user_id: str
     status: ApprovalStatus = ApprovalStatus.APPROVED
@@ -464,15 +467,19 @@ class Approval:
         self,
         *,
         action_id: str,
+        action_type: str,
         object_type: str,
         object_id: str,
+        object_version_id: str,
         object_version: int,
     ) -> None:
         if (
             self.status != ApprovalStatus.APPROVED
             or self.action_id != action_id
+            or self.action_type != action_type
             or self.object_type != object_type
             or self.object_id != object_id
+            or self.object_version_id != object_version_id
             or self.object_version != object_version
         ):
             msg = "approval is bound to a different object/version/action"
@@ -482,15 +489,19 @@ class Approval:
         self,
         *,
         action_id: str,
+        action_type: str,
         object_type: str,
         object_id: str,
+        object_version_id: str,
         object_version: int,
     ) -> bool:
         try:
             self.assert_valid_for(
                 action_id=action_id,
+                action_type=action_type,
                 object_type=object_type,
                 object_id=object_id,
+                object_version_id=object_version_id,
                 object_version=object_version,
             )
         except ApprovalBindingError:

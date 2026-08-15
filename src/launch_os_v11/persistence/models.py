@@ -3,7 +3,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from launch_os_v11.domain.ids import new_id
@@ -49,6 +59,7 @@ class OrganizationModel(TimestampMixin, Base):
 
 class BusinessModel(TimestampMixin, VersionMixin, Base):
     __tablename__ = "businesses"
+    __table_args__ = (CheckConstraint("version >= 1", name="ck_businesses_version_positive"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     organization_id: Mapped[str] = mapped_column(
@@ -327,6 +338,7 @@ class AssetVersionModel(Base):
     __tablename__ = "asset_versions"
     __table_args__ = (
         UniqueConstraint("asset_id", "version_number", name="uq_asset_version_number"),
+        CheckConstraint("version_number >= 1", name="ck_asset_versions_number_positive"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -363,11 +375,18 @@ class PermissionPolicyModel(BusinessScopedMixin, Base):
 
 class ActionModel(BusinessScopedMixin, Base):
     __tablename__ = "actions"
+    __table_args__ = (
+        CheckConstraint(
+            "target_object_version >= 1",
+            name="ck_actions_target_object_version_positive",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     action_type: Mapped[str] = mapped_column(String(128), nullable=False)
     target_object_type: Mapped[str] = mapped_column(String(128), nullable=False)
     target_object_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    target_object_version_id: Mapped[str] = mapped_column(String(36), nullable=False)
     target_object_version: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
@@ -375,13 +394,18 @@ class ActionModel(BusinessScopedMixin, Base):
 
 class ApprovalModel(Base):
     __tablename__ = "approvals"
+    __table_args__ = (
+        CheckConstraint("object_version >= 1", name="ck_approvals_object_version_positive"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     organization_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     business_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     action_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    action_type: Mapped[str] = mapped_column(String(128), nullable=False)
     object_type: Mapped[str] = mapped_column(String(128), nullable=False)
     object_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    object_version_id: Mapped[str] = mapped_column(String(36), nullable=False)
     object_version: Mapped[int] = mapped_column(Integer, nullable=False)
     approved_by_user_id: Mapped[str] = mapped_column(String(36), nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False)

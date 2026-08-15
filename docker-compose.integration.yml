@@ -1,0 +1,16 @@
+name: launch-os-v11-integration
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: launch_os_v11_test
+      POSTGRES_USER: launch_os_v11
+      POSTGRES_PASSWORD: launch_os_v11
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U launch_os_v11 -d launch_os_v11_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 30

@@ -33,11 +33,17 @@ Do not expand broad modules until this loop closes in staging.
 
 Install dependencies:
 
-`make install`
+`python3 -m pip install -r requirements-dev.lock && python3 -m pip install -e . --no-deps`
+
+For dependency refresh during development, `make install` resolves from `pyproject.toml`; update `requirements-dev.lock` in a clean virtual environment when accepted.
 
 Run checks:
 
 `make check`
+
+Run PostgreSQL 16 integration checks with Docker:
+
+`make test-postgres`
 
 Run migrations locally against the configured `LAUNCH_OS_DATABASE_URL`:
 
@@ -51,4 +57,4 @@ Run the API skeleton:
 
 `make run-api`
 
-Local PostgreSQL and Redis are described in `docker-compose.local.yml`. Staging-only compose is in `docker-compose.staging.yml`. No production compose or production secrets are present.
+Local PostgreSQL and Redis are described in `docker-compose.local.yml`. PostgreSQL integration uses `docker-compose.integration.yml`. Staging-only compose is in `docker-compose.staging.yml`. No production compose or production secrets are present.
