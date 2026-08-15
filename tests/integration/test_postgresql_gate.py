@@ -5,6 +5,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, func, inspect, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from launch_os_v11.api.readiness import check_database_readiness
@@ -17,6 +18,7 @@ from launch_os_v11.application.commands import (
 )
 from launch_os_v11.domain.scope import TenantScope
 from launch_os_v11.persistence.models import (
+    AuditLogModel,
     BusinessEventModel,
     BusinessModel,
     GoalModel,
@@ -225,7 +227,22 @@ def _assert_atomic_rollback(database_url: str) -> None:
 
     check_session = factory()
     try:
-        assert check_session.scalar(select(func.count()).select_from(BusinessModel)) == 0
+        assert (
+            check_session.scalar(
+                select(func.count()).select_from(BusinessModel).where(
+                    BusinessModel.name == "Rollback Business"
+                )
+            )
+            == 0
+        )
+        assert (
+            check_session.scalar(
+                select(func.count()).select_from(AuditLogModel).where(
+                    AuditLogModel.correlation_id == "pg-rollback"
+                )
+            )
+            == 0
+        )
         assert check_session.scalar(
             select(func.count()).select_from(OutboxEventModel).where(
                 OutboxEventModel.correlation_id == "pg-rollback"
@@ -233,6 +250,93 @@ def _assert_atomic_rollback(database_url: str) -> None:
         ) == 0
     finally:
         check_session.close()
+        engine.dispose()
+
+
+def _assert_parent_graph_regression(database_url: str) -> None:
+    engine = create_engine(database_url, future=True)
+    factory = create_session_factory(engine)
+
+    parent_session = factory()
+    try:
+        with parent_session.begin():
+            organization = create_organization(parent_session, name="Parent Graph Org")
+            business = create_business(
+                parent_session,
+                organization_id=organization.id,
+                name="Parent Graph Business",
+                timezone="UTC",
+                actor_user_id=None,
+                correlation_id="pg-parent-graph",
+            ).record
+            assert business.organization_id == organization.id
+
+        assert (
+            parent_session.scalar(
+                select(func.count()).select_from(BusinessModel).where(
+                    BusinessModel.id == business.id
+                )
+            )
+            == 1
+        )
+        assert (
+            parent_session.scalar(
+                select(func.count()).select_from(AuditLogModel).where(
+                    AuditLogModel.correlation_id == "pg-parent-graph"
+                )
+            )
+            == 1
+        )
+        assert (
+            parent_session.scalar(
+                select(func.count()).select_from(OutboxEventModel).where(
+                    OutboxEventModel.correlation_id == "pg-parent-graph"
+                )
+            )
+            == 1
+        )
+    finally:
+        parent_session.close()
+
+    orphan_session = factory()
+    try:
+        with pytest.raises(IntegrityError), orphan_session.begin():
+            create_business(
+                orphan_session,
+                organization_id="missing-organization",
+                name="Orphan Business",
+                timezone="UTC",
+                actor_user_id=None,
+                correlation_id="pg-orphan",
+            )
+        orphan_session.rollback()
+
+        assert (
+            orphan_session.scalar(
+                select(func.count()).select_from(BusinessModel).where(
+                    BusinessModel.name == "Orphan Business"
+                )
+            )
+            == 0
+        )
+        assert (
+            orphan_session.scalar(
+                select(func.count()).select_from(AuditLogModel).where(
+                    AuditLogModel.correlation_id == "pg-orphan"
+                )
+            )
+            == 0
+        )
+        assert (
+            orphan_session.scalar(
+                select(func.count()).select_from(OutboxEventModel).where(
+                    OutboxEventModel.correlation_id == "pg-orphan"
+                )
+            )
+            == 0
+        )
+    finally:
+        orphan_session.close()
         engine.dispose()
 
 
@@ -250,6 +354,7 @@ def test_postgresql_16_migration_and_integration_gate(monkeypatch: pytest.Monkey
     )
     assert readiness.ready
     assert readiness.database == "ok"
+    _assert_parent_graph_regression(database_url)
     _assert_atomic_rollback(database_url)
     _assert_repository_contract(database_url)
 

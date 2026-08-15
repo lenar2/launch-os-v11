@@ -15,7 +15,7 @@ type:
 	$(PYTHON) -m mypy
 
 test:
-	$(PYTHON) -m pytest
+	$(PYTHON) -m pytest -m "not postgres"
 
 test-migrations:
 	$(PYTHON) -m pytest tests/test_migrations.py

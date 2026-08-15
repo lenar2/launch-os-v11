@@ -142,6 +142,7 @@ def create_business(
         timezone=timezone,
     )
     session.add(business)
+    session.flush()
     event = _event(
         context,
         event_type="business.created",
