@@ -116,6 +116,8 @@ def create_organization(
 ) -> OrganizationModel:
     organization = OrganizationModel(id=new_id(), name=name)
     session.add(organization)
+    # Scalar FK ids do not create ORM object dependencies for later commands.
+    session.flush()
     return organization
 
 

@@ -1,10 +1,12 @@
 import os
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, func, inspect, select
+from sqlalchemy import create_engine, event, func, inspect, select
+from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -258,6 +260,32 @@ def _assert_foreign_key_parity(database_url: str) -> None:
     assert _metadata_foreign_keys() == EXPECTED_FOREIGN_KEYS
 
 
+def _capture_insert_order(engine: Engine) -> tuple[list[str], Any]:
+    inserted_tables: list[str] = []
+
+    def before_cursor_execute(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        del conn, cursor, parameters, context, executemany
+        normalized = statement.strip().lower()
+        if not normalized.startswith("insert into "):
+            return
+        table_name = normalized.removeprefix("insert into ").split(" ", 1)[0]
+        inserted_tables.append(table_name.strip('"'))
+
+    event.listen(engine, "before_cursor_execute", before_cursor_execute)
+    return inserted_tables, before_cursor_execute
+
+
+def _first_insert_index(inserted_tables: list[str], table_name: str) -> int:
+    return inserted_tables.index(table_name)
+
+
 def _assert_repository_contract(database_url: str) -> None:
     engine = create_engine(database_url, future=True)
     factory = create_session_factory(engine)
@@ -456,6 +484,7 @@ def _assert_orphan_side_effects_rejected(database_url: str) -> None:
 def _assert_parent_graph_regression(database_url: str) -> None:
     engine = create_engine(database_url, future=True)
     factory = create_session_factory(engine)
+    inserted_tables, listener = _capture_insert_order(engine)
 
     parent_session = factory()
     try:
@@ -470,6 +499,30 @@ def _assert_parent_graph_regression(database_url: str) -> None:
                 correlation_id="pg-parent-graph",
             ).record
             assert business.organization_id == organization.id
+            assert parent_session.in_transaction()
+
+            observer_session = factory()
+            try:
+                assert observer_session.get(OrganizationModel, organization.id) is None
+                assert observer_session.get(BusinessModel, business.id) is None
+                assert (
+                    observer_session.scalar(
+                        select(func.count()).select_from(AuditLogModel).where(
+                            AuditLogModel.correlation_id == "pg-parent-graph"
+                        )
+                    )
+                    == 0
+                )
+                assert (
+                    observer_session.scalar(
+                        select(func.count()).select_from(OutboxEventModel).where(
+                            OutboxEventModel.correlation_id == "pg-parent-graph"
+                        )
+                    )
+                    == 0
+                )
+            finally:
+                observer_session.close()
 
         assert (
             parent_session.scalar(
@@ -495,7 +548,15 @@ def _assert_parent_graph_regression(database_url: str) -> None:
             )
             == 1
         )
+        organization_insert = _first_insert_index(inserted_tables, "organizations")
+        business_insert = _first_insert_index(inserted_tables, "businesses")
+        audit_insert = _first_insert_index(inserted_tables, "audit_logs")
+        outbox_insert = _first_insert_index(inserted_tables, "outbox_events")
+        assert organization_insert < business_insert
+        assert business_insert < audit_insert
+        assert business_insert < outbox_insert
     finally:
+        event.remove(engine, "before_cursor_execute", listener)
         parent_session.close()
 
     orphan_session = factory()
