@@ -10,5 +10,10 @@ __pycache__/
 .env.*
 !.env.example
 .local/
+*.db
+*.sqlite
+*.sqlite3
+.idea/
+.vscode/
 dist/
 htmlcov/
