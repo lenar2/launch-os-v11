@@ -38,8 +38,12 @@ class VersionMixin:
 
 
 class BusinessScopedMixin(TimestampMixin, VersionMixin):
-    organization_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    business_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    organization_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    business_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("businesses.id"), nullable=False, index=True
+    )
 
 
 class UserModel(TimestampMixin, Base):
@@ -76,9 +80,15 @@ class BusinessMembershipModel(TimestampMixin, Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    organization_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    business_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    user_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    organization_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    business_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("businesses.id"), nullable=False, index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=False, index=True
+    )
     role: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
@@ -112,7 +122,9 @@ class OfferModel(BusinessScopedMixin, Base):
     __tablename__ = "offers"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    product_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    product_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("products.id"), nullable=False, index=True
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     price_descriptor: Mapped[str | None] = mapped_column(String(255))
@@ -152,7 +164,9 @@ class EvidenceModel(BusinessScopedMixin, Base):
     __tablename__ = "evidence"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    source_record_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    source_record_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("source_records.id"), nullable=False, index=True
+    )
     statement: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     confidence: Mapped[float | None]
@@ -197,8 +211,12 @@ class BusinessSnapshotModel(Base):
     __tablename__ = "business_snapshots"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    organization_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    business_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    organization_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    business_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("businesses.id"), nullable=False, index=True
+    )
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
@@ -217,11 +235,21 @@ class LaunchModel(BusinessScopedMixin, Base):
     __tablename__ = "launches"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    campaign_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    offer_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    goal_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    channel_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    snapshot_id: Mapped[str | None] = mapped_column(String(36))
+    campaign_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("campaigns.id"), nullable=False, index=True
+    )
+    offer_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("offers.id"), nullable=False, index=True
+    )
+    goal_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("goals.id"), nullable=False, index=True
+    )
+    channel_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("channels.id"), nullable=False, index=True
+    )
+    snapshot_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("business_snapshots.id")
+    )
     status: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
@@ -229,7 +257,9 @@ class LaunchPhaseModel(BusinessScopedMixin, Base):
     __tablename__ = "launch_phases"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    launch_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    launch_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("launches.id"), nullable=False, index=True
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -247,8 +277,12 @@ class DecisionModel(BusinessScopedMixin, Base):
     reversibility: Mapped[str] = mapped_column(String(128), nullable=False)
     risk_class: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False)
-    snapshot_id: Mapped[str | None] = mapped_column(String(36))
-    supersedes_decision_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    snapshot_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("business_snapshots.id")
+    )
+    supersedes_decision_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("decisions.id"), index=True
+    )
     next_checkpoint: Mapped[str | None] = mapped_column(Text)
     evidence_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     assumption_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
@@ -259,7 +293,9 @@ class DecisionAlternativeModel(BusinessScopedMixin, Base):
     __tablename__ = "decision_alternatives"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    decision_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    decision_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("decisions.id"), nullable=False, index=True
+    )
     action: Mapped[str] = mapped_column(Text, nullable=False)
     rejection_reason: Mapped[str] = mapped_column(Text, nullable=False)
 
@@ -268,7 +304,9 @@ class ControllerReviewModel(BusinessScopedMixin, Base):
     __tablename__ = "controller_reviews"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    decision_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    decision_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("decisions.id"), index=True
+    )
     asset_version_id: Mapped[str | None] = mapped_column(String(36), index=True)
     controller_name: Mapped[str] = mapped_column(String(128), nullable=False)
     verdict: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -279,8 +317,12 @@ class ExperimentModel(BusinessScopedMixin, Base):
     __tablename__ = "experiments"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    decision_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    hypothesis_id: Mapped[str | None] = mapped_column(String(36))
+    decision_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("decisions.id"), nullable=False, index=True
+    )
+    hypothesis_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("hypotheses.id")
+    )
     metric: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     causality_class: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -290,7 +332,9 @@ class ExperimentRuleModel(BusinessScopedMixin, Base):
     __tablename__ = "experiment_rules"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    experiment_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    experiment_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("experiments.id"), nullable=False, index=True
+    )
     baseline: Mapped[str] = mapped_column(Text, nullable=False)
     segment: Mapped[str] = mapped_column(Text, nullable=False)
     treatment: Mapped[str] = mapped_column(Text, nullable=False)
@@ -309,7 +353,9 @@ class ExperimentResultModel(BusinessScopedMixin, Base):
     __tablename__ = "experiment_results"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    experiment_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    experiment_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("experiments.id"), nullable=False, index=True
+    )
     result_class: Mapped[str] = mapped_column(String(64), nullable=False)
     observed_value: Mapped[str] = mapped_column(Text, nullable=False)
     interpreted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -319,7 +365,9 @@ class CreativeBriefModel(BusinessScopedMixin, Base):
     __tablename__ = "creative_briefs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    decision_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    decision_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("decisions.id"), nullable=False, index=True
+    )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     objective: Mapped[str] = mapped_column(Text, nullable=False)
     constraints: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
@@ -329,7 +377,9 @@ class AssetModel(BusinessScopedMixin, Base):
     __tablename__ = "assets"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    creative_brief_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    creative_brief_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("creative_briefs.id"), nullable=False, index=True
+    )
     asset_type: Mapped[str] = mapped_column(String(64), nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
 
@@ -342,9 +392,15 @@ class AssetVersionModel(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    organization_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    business_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    asset_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    organization_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    business_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("businesses.id"), nullable=False, index=True
+    )
+    asset_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("assets.id"), nullable=False, index=True
+    )
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     created_by_user_id: Mapped[str] = mapped_column(String(36), nullable=False)
@@ -356,8 +412,12 @@ class PublicationModel(BusinessScopedMixin, Base):
     __tablename__ = "publications"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    asset_version_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    channel_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    asset_version_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("asset_versions.id"), nullable=False, index=True
+    )
+    channel_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("channels.id"), nullable=False, index=True
+    )
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -399,15 +459,23 @@ class ApprovalModel(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    organization_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    business_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    action_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    organization_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    business_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("businesses.id"), nullable=False, index=True
+    )
+    action_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("actions.id"), nullable=False, index=True
+    )
     action_type: Mapped[str] = mapped_column(String(128), nullable=False)
     object_type: Mapped[str] = mapped_column(String(128), nullable=False)
     object_id: Mapped[str] = mapped_column(String(36), nullable=False)
     object_version_id: Mapped[str] = mapped_column(String(36), nullable=False)
     object_version: Mapped[int] = mapped_column(Integer, nullable=False)
-    approved_by_user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    approved_by_user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=False
+    )
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -416,8 +484,12 @@ class ExecutionModel(BusinessScopedMixin, Base):
     __tablename__ = "executions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    action_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    approval_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    action_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("actions.id"), nullable=False, index=True
+    )
+    approval_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("approvals.id"), index=True
+    )
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     external_reference: Mapped[str | None] = mapped_column(String(255))
@@ -428,7 +500,9 @@ class BusinessEventModel(BusinessScopedMixin, Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     event_type: Mapped[str] = mapped_column(String(128), nullable=False)
-    source_record_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    source_record_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("source_records.id"), index=True
+    )
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
@@ -440,8 +514,12 @@ class OutboxEventModel(Base):
     __tablename__ = "outbox_events"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    organization_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    business_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    organization_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    business_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("businesses.id"), nullable=False, index=True
+    )
     event_type: Mapped[str] = mapped_column(String(128), nullable=False)
     aggregate_type: Mapped[str] = mapped_column(String(128), nullable=False)
     aggregate_id: Mapped[str] = mapped_column(String(36), nullable=False)
@@ -482,7 +560,9 @@ class AgentRunModel(BusinessScopedMixin, Base):
     __tablename__ = "agent_runs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    agent_definition_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    agent_definition_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_definitions.id"), nullable=False, index=True
+    )
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     input_ref: Mapped[str | None] = mapped_column(String(255))
     output_ref: Mapped[str | None] = mapped_column(String(255))
@@ -517,8 +597,12 @@ class LearningModel(BusinessScopedMixin, Base):
     __tablename__ = "learnings"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    decision_id: Mapped[str | None] = mapped_column(String(36), index=True)
-    experiment_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    decision_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("decisions.id"), index=True
+    )
+    experiment_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("experiments.id"), index=True
+    )
     statement: Mapped[str] = mapped_column(Text, nullable=False)
     evidence_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     causality_class: Mapped[str] = mapped_column(String(128), nullable=False)

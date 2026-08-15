@@ -19,9 +19,11 @@ from launch_os_v11.application.commands import (
 from launch_os_v11.domain.scope import TenantScope
 from launch_os_v11.persistence.models import (
     AuditLogModel,
+    Base,
     BusinessEventModel,
     BusinessModel,
     GoalModel,
+    OrganizationModel,
     OutboxEventModel,
 )
 from launch_os_v11.persistence.repositories import ScopedRepository
@@ -74,6 +76,89 @@ EXPECTED_TABLES = {
     "learnings",
     "alembic_version",
 }
+
+ForeignKeyPair = tuple[str, str, str, str]
+
+TENANT_SCOPED_TABLES = {
+    "business_memberships",
+    "goals",
+    "constraints",
+    "products",
+    "offers",
+    "channels",
+    "source_records",
+    "evidence",
+    "claims",
+    "hypotheses",
+    "information_needs",
+    "business_snapshots",
+    "campaigns",
+    "launches",
+    "launch_phases",
+    "decisions",
+    "decision_alternatives",
+    "controller_reviews",
+    "experiments",
+    "experiment_rules",
+    "experiment_results",
+    "creative_briefs",
+    "assets",
+    "asset_versions",
+    "publications",
+    "permission_policies",
+    "actions",
+    "approvals",
+    "executions",
+    "business_events",
+    "outbox_events",
+    "jobs",
+    "agent_definitions",
+    "agent_runs",
+    "audit_logs",
+    "feature_flags",
+    "learnings",
+}
+
+EXPECTED_FOREIGN_KEYS: set[ForeignKeyPair] = (
+    {
+        (table_name, "organization_id", "organizations", "id")
+        for table_name in TENANT_SCOPED_TABLES
+    }
+    | {(table_name, "business_id", "businesses", "id") for table_name in TENANT_SCOPED_TABLES}
+    | {
+        ("businesses", "organization_id", "organizations", "id"),
+        ("business_memberships", "user_id", "users", "id"),
+        ("offers", "product_id", "products", "id"),
+        ("evidence", "source_record_id", "source_records", "id"),
+        ("launches", "campaign_id", "campaigns", "id"),
+        ("launches", "offer_id", "offers", "id"),
+        ("launches", "goal_id", "goals", "id"),
+        ("launches", "channel_id", "channels", "id"),
+        ("launches", "snapshot_id", "business_snapshots", "id"),
+        ("launch_phases", "launch_id", "launches", "id"),
+        ("decisions", "snapshot_id", "business_snapshots", "id"),
+        ("decisions", "supersedes_decision_id", "decisions", "id"),
+        ("decision_alternatives", "decision_id", "decisions", "id"),
+        ("controller_reviews", "decision_id", "decisions", "id"),
+        ("experiments", "decision_id", "decisions", "id"),
+        ("experiments", "hypothesis_id", "hypotheses", "id"),
+        ("experiment_rules", "experiment_id", "experiments", "id"),
+        ("experiment_results", "experiment_id", "experiments", "id"),
+        ("creative_briefs", "decision_id", "decisions", "id"),
+        ("assets", "creative_brief_id", "creative_briefs", "id"),
+        ("asset_versions", "asset_id", "assets", "id"),
+        ("publications", "asset_version_id", "asset_versions", "id"),
+        ("publications", "channel_id", "channels", "id"),
+        ("approvals", "action_id", "actions", "id"),
+        ("approvals", "approved_by_user_id", "users", "id"),
+        ("executions", "action_id", "actions", "id"),
+        ("executions", "approval_id", "approvals", "id"),
+        ("business_events", "source_record_id", "source_records", "id"),
+        ("agent_runs", "agent_definition_id", "agent_definitions", "id"),
+        ("learnings", "decision_id", "decisions", "id"),
+        ("learnings", "experiment_id", "experiments", "id"),
+    }
+)
 
 
 def _database_url() -> str:
@@ -133,6 +218,44 @@ def _assert_schema_contract(database_url: str) -> None:
         assert "ck_actions_target_object_version_positive" in action_checks
     finally:
         engine.dispose()
+
+
+def _metadata_foreign_keys() -> set[ForeignKeyPair]:
+    return {
+        (
+            table.name,
+            foreign_key.parent.name,
+            foreign_key.column.table.name,
+            foreign_key.column.name,
+        )
+        for table in Base.metadata.tables.values()
+        for foreign_key in table.foreign_keys
+    }
+
+
+def _database_foreign_keys(database_url: str) -> set[ForeignKeyPair]:
+    engine = create_engine(database_url, future=True)
+    try:
+        inspector = inspect(engine)
+        result: set[ForeignKeyPair] = set()
+        for table_name in EXPECTED_TABLES - {"alembic_version"}:
+            for foreign_key in inspector.get_foreign_keys(table_name):
+                referred_table = foreign_key["referred_table"]
+                assert referred_table is not None
+                for constrained_column, referred_column in zip(
+                    foreign_key["constrained_columns"],
+                    foreign_key["referred_columns"],
+                    strict=True,
+                ):
+                    result.add((table_name, constrained_column, referred_table, referred_column))
+        return result
+    finally:
+        engine.dispose()
+
+
+def _assert_foreign_key_parity(database_url: str) -> None:
+    assert _database_foreign_keys(database_url) == EXPECTED_FOREIGN_KEYS
+    assert _metadata_foreign_keys() == EXPECTED_FOREIGN_KEYS
 
 
 def _assert_repository_contract(database_url: str) -> None:
@@ -202,20 +325,14 @@ def _assert_repository_contract(database_url: str) -> None:
 def _assert_atomic_rollback(database_url: str) -> None:
     engine = create_engine(database_url, future=True)
     factory = create_session_factory(engine)
-    seed_session = factory()
-    try:
-        organization = create_organization(seed_session, name="Rollback Org")
-        seed_session.commit()
-        organization_id = organization.id
-    finally:
-        seed_session.close()
 
     rollback_session: Session = factory()
     try:
         with pytest.raises(RuntimeError), rollback_session.begin():
+            organization = create_organization(rollback_session, name="Rollback Org")
             create_business(
                 rollback_session,
-                organization_id=organization_id,
+                organization_id=organization.id,
                 name="Rollback Business",
                 timezone="UTC",
                 actor_user_id=None,
@@ -227,6 +344,14 @@ def _assert_atomic_rollback(database_url: str) -> None:
 
     check_session = factory()
     try:
+        assert (
+            check_session.scalar(
+                select(func.count()).select_from(OrganizationModel).where(
+                    OrganizationModel.name == "Rollback Org"
+                )
+            )
+            == 0
+        )
         assert (
             check_session.scalar(
                 select(func.count()).select_from(BusinessModel).where(
@@ -248,6 +373,81 @@ def _assert_atomic_rollback(database_url: str) -> None:
                 OutboxEventModel.correlation_id == "pg-rollback"
             )
         ) == 0
+    finally:
+        check_session.close()
+        engine.dispose()
+
+
+def _assert_orphan_side_effects_rejected(database_url: str) -> None:
+    engine = create_engine(database_url, future=True)
+    factory = create_session_factory(engine)
+    seed_session = factory()
+    try:
+        organization = create_organization(seed_session, name="Side Effect FK Org")
+        seed_session.commit()
+        organization_id = organization.id
+    finally:
+        seed_session.close()
+
+    now = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
+    audit_session = factory()
+    try:
+        with pytest.raises(IntegrityError), audit_session.begin():
+            audit_session.add(
+                AuditLogModel(
+                    organization_id=organization_id,
+                    business_id="missing-business",
+                    actor_user_id=None,
+                    action="orphan_audit",
+                    object_type="Business",
+                    object_id="missing-business",
+                    payload={},
+                    correlation_id="pg-orphan-audit",
+                )
+            )
+        audit_session.rollback()
+    finally:
+        audit_session.close()
+
+    outbox_session = factory()
+    try:
+        with pytest.raises(IntegrityError), outbox_session.begin():
+            outbox_session.add(
+                OutboxEventModel(
+                    organization_id=organization_id,
+                    business_id="missing-business",
+                    event_type="orphan.outbox",
+                    aggregate_type="Business",
+                    aggregate_id="missing-business",
+                    payload={},
+                    status="PENDING",
+                    occurred_at=now,
+                    correlation_id="pg-orphan-outbox",
+                    created_at=now,
+                )
+            )
+        outbox_session.rollback()
+    finally:
+        outbox_session.close()
+
+    check_session = factory()
+    try:
+        assert (
+            check_session.scalar(
+                select(func.count()).select_from(AuditLogModel).where(
+                    AuditLogModel.correlation_id == "pg-orphan-audit"
+                )
+            )
+            == 0
+        )
+        assert (
+            check_session.scalar(
+                select(func.count()).select_from(OutboxEventModel).where(
+                    OutboxEventModel.correlation_id == "pg-orphan-outbox"
+                )
+            )
+            == 0
+        )
     finally:
         check_session.close()
         engine.dispose()
@@ -346,6 +546,7 @@ def test_postgresql_16_migration_and_integration_gate(monkeypatch: pytest.Monkey
 
     command.upgrade(config, "head")
     _assert_schema_contract(database_url)
+    _assert_foreign_key_parity(database_url)
     readiness = check_database_readiness(
         Settings(
             LAUNCH_OS_ENV="test",
@@ -355,6 +556,7 @@ def test_postgresql_16_migration_and_integration_gate(monkeypatch: pytest.Monkey
     assert readiness.ready
     assert readiness.database == "ok"
     _assert_parent_graph_regression(database_url)
+    _assert_orphan_side_effects_rejected(database_url)
     _assert_atomic_rollback(database_url)
     _assert_repository_contract(database_url)
 
@@ -367,4 +569,5 @@ def test_postgresql_16_migration_and_integration_gate(monkeypatch: pytest.Monkey
 
     command.upgrade(config, "head")
     _assert_schema_contract(database_url)
+    _assert_foreign_key_parity(database_url)
     get_settings.cache_clear()

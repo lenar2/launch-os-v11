@@ -142,6 +142,7 @@ def create_business(
         timezone=timezone,
     )
     session.add(business)
+    # Business is the tenant parent for the side-effect rows appended below.
     session.flush()
     event = _event(
         context,
