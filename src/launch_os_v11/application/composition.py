@@ -5,7 +5,7 @@ from launch_os_v11.ai_runtime.context import ContextBuilder
 from launch_os_v11.ai_runtime.errors import AIConfigurationError
 from launch_os_v11.ai_runtime.registry import AgentRegistry, default_agent_registry
 from launch_os_v11.ai_runtime.router import ModelRouter
-from launch_os_v11.application.decision_workflow import DecisionWorkflowAdvanceHandler
+from launch_os_v11.application.decision_governance import GuardedDecisionWorkflowAdvanceHandler
 from launch_os_v11.platform.config import Settings
 from launch_os_v11.runtime.contracts import JOB_TYPE_WORKFLOW_ADVANCE
 from launch_os_v11.runtime.handlers import JobHandler
@@ -31,7 +31,7 @@ def compose_application_handler_registry(
         return handlers
     if not settings.ai_team_enabled and model_router is None:
         raise AIConfigurationError("Phase 3 decision workflow requires the governed AI runtime")
-    handlers[JOB_TYPE_WORKFLOW_ADVANCE] = DecisionWorkflowAdvanceHandler(
+    handlers[JOB_TYPE_WORKFLOW_ADVANCE] = GuardedDecisionWorkflowAdvanceHandler(
         registry=actual_registry,
         queue=queue,
     )

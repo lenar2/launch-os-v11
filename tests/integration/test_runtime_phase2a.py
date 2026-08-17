@@ -22,6 +22,8 @@ from launch_os_v11.persistence.session import create_session_factory
 from launch_os_v11.platform.config import get_settings
 from launch_os_v11.runtime.clock import FixedClock
 from launch_os_v11.runtime.contracts import (
+    EXECUTABLE_JOB_TYPES,
+    JOB_TYPE_AI_RUN_CONTROLLER,
     JOB_TYPE_RUNTIME_PROBE,
     RESERVED_JOB_TYPES,
 )
@@ -173,7 +175,8 @@ def test_phase2a_postgresql_redis_runtime_gate(monkeypatch: pytest.MonkeyPatch) 
     )
 
     try:
-        assert "ai.run_controller" in RESERVED_JOB_TYPES
+        assert JOB_TYPE_AI_RUN_CONTROLLER in EXECUTABLE_JOB_TYPES
+        assert JOB_TYPE_AI_RUN_CONTROLLER not in RESERVED_JOB_TYPES
         assert "ai.run_agent" not in RESERVED_JOB_TYPES
         _assert_job_schema(engine)
         scope = _seed_scope(factory)
