@@ -156,3 +156,76 @@ class RuntimeProbeOutput(StrictOutputModel):
     hypotheses: list[HypothesisStatement] = Field(default_factory=list)
     unknowns: list[UnknownStatement] = Field(default_factory=list)
     confidence: float = Field(ge=0, le=1)
+
+
+class ContentStrategyProposal(StrictOutputModel):
+    schema_name: Literal["ContentStrategyProposal"] = "ContentStrategyProposal"
+    schema_version: Literal[1] = 1
+    objective: str = Field(min_length=1)
+    audience: str = Field(min_length=1)
+    content_job: str = Field(min_length=1)
+    core_message: str = Field(min_length=1)
+    angle: str = Field(min_length=1)
+    message_mechanism: str = Field(min_length=1)
+    tone: str = Field(min_length=1)
+    cta_intent: str = Field(min_length=1)
+    channel_format: str = Field(min_length=1)
+    evidence_refs: list[EvidenceReference] = Field(default_factory=list)
+    allowed_claims: list[str] = Field(default_factory=list)
+    forbidden_or_unsupported_claims: list[str] = Field(default_factory=list)
+    brand_constraints: list[str] = Field(default_factory=list)
+    production_constraints: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    unknowns: list[UnknownStatement] = Field(default_factory=list)
+
+
+class ClaimInventoryItem(StrictOutputModel):
+    text: str = Field(min_length=1)
+    claim_type: Literal[
+        "FACTUAL",
+        "QUANTITATIVE",
+        "TESTIMONIAL",
+        "RESULT",
+        "PROMOTIONAL",
+    ]
+    requires_evidence: bool
+    evidence_ref: str | None = None
+
+    @model_validator(mode="after")
+    def _requires_evidence_ref(self) -> ClaimInventoryItem:
+        if self.requires_evidence and not self.evidence_ref:
+            raise ValueError("evidence-backed claim requires evidence_ref")
+        return self
+
+
+class RightsProvenanceDeclaration(StrictOutputModel):
+    origin: Literal["GENERATED", "USER_PROVIDED", "LICENSED", "DERIVED"]
+    related_source_asset_ids: list[str] = Field(default_factory=list)
+    permission_scope: str | None = None
+    customer_content_consent_ref: str | None = None
+    publication_restrictions: list[str] = Field(default_factory=list)
+    license_expires_at: str | None = None
+
+
+class AssetDraftProposal(StrictOutputModel):
+    schema_name: Literal["AssetDraftProposal"] = "AssetDraftProposal"
+    schema_version: Literal[1] = 1
+    body: str = Field(min_length=1)
+    opening: str | None = None
+    cta: str = Field(min_length=1)
+    claim_inventory: list[ClaimInventoryItem] = Field(default_factory=list)
+    evidence_refs: list[EvidenceReference] = Field(default_factory=list)
+    content_notes: list[str] = Field(default_factory=list)
+    rights: RightsProvenanceDeclaration
+
+    @model_validator(mode="after")
+    def _claims_reference_declared_evidence(self) -> AssetDraftProposal:
+        declared = {item.evidence_id for item in self.evidence_refs}
+        missing = [
+            claim.evidence_ref
+            for claim in self.claim_inventory
+            if claim.evidence_ref is not None and claim.evidence_ref not in declared
+        ]
+        if missing:
+            raise ValueError("claim evidence_ref must be present in evidence_refs")
+        return self

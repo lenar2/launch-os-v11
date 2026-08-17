@@ -1,6 +1,6 @@
 # Launch OS v11
 
-Status: pre-code canonical handoff converted into repository docs.
+Status: canonical architecture with governed implementation phases in progress.
 
 Launch OS v11 is an AI-native operating system for growth, launches, content, social media, sales, and retention for expert, creator, and education businesses. It maintains a connected Business Twin, coordinates specialist AI capabilities and independent controllers, creates real assets, executes approved actions through permissioned connectors, observes outcomes, and learns from real traces.
 
@@ -22,9 +22,10 @@ Current implementation posture:
 - Architecture: ready.
 - Phase 0/1 domain and persistence foundation: implemented.
 - Phase 2A durable async runtime: implemented.
-- Phase 2B governed AI runtime foundation: implemented behind explicit runtime
-  contracts and fake-adapter CI coverage.
-- Phase 3 business decision workflow and broad product features: not yet.
+- Phase 2B governed AI runtime foundation: implemented behind explicit runtime contracts and deterministic fake-adapter CI coverage.
+- Phase 3 governed business decision workflow: implemented and accepted.
+- Phase 4 governed production workflow: implemented for one Telegram-ready text asset, with version-bound truth/brand/constitutional/manipulation/legal/quality/rights review and no external write.
+- Phase 5 ActionProposal, permissioned Telegram execution, and connector observation: not yet.
 
 First build target:
 
@@ -38,8 +39,6 @@ Install dependencies:
 
 `python3 -m pip install -r requirements-dev.lock && python3 -m pip install -e . --no-deps`
 
-For dependency refresh during development, `make install` resolves from `pyproject.toml`; update `requirements-dev.lock` in a clean virtual environment when accepted.
-
 Run checks:
 
 `make check`
@@ -52,10 +51,17 @@ Run Phase 2A PostgreSQL + Redis runtime integration checks with Docker:
 
 `make test-runtime`
 
-Run Phase 2B governed AI runtime PostgreSQL + Redis integration checks with
-Docker and the deterministic fake adapter:
+Run Phase 2B governed AI runtime PostgreSQL + Redis integration checks with Docker and the deterministic fake adapter:
 
 `make test-ai-runtime`
+
+Run Phase 3 governed decision workflow integration:
+
+`make test-decision-workflow`
+
+Run Phase 4 governed production workflow integration:
+
+`make test-production-workflow`
 
 Run migrations locally against the configured `LAUNCH_OS_DATABASE_URL`:
 

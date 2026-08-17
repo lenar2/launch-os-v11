@@ -1,1 +1,1 @@
-"""Production boundary reserved for Creative Studio application services."""
+"""Phase 4 governed production capabilities."""

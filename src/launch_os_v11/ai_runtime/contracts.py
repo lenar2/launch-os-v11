@@ -33,6 +33,9 @@ class AgentAuthority(StrEnum):
     PROPOSE_DECISION_CANDIDATE = "PROPOSE_DECISION_CANDIDATE"
     REVIEW_DECISION_CANDIDATE = "REVIEW_DECISION_CANDIDATE"
     PROPOSE_EXPERIMENT = "PROPOSE_EXPERIMENT"
+    PROPOSE_CONTENT_STRATEGY = "PROPOSE_CONTENT_STRATEGY"
+    PROPOSE_ASSET_DRAFT = "PROPOSE_ASSET_DRAFT"
+    REVIEW_ASSET_VERSION = "REVIEW_ASSET_VERSION"
 
 
 class AgentRunStatus(StrEnum):
@@ -189,29 +192,48 @@ def _validate_contract(contract: AgentContract) -> None:
     if not contract.required_controller_types:
         raise AIContractError("agent contract must declare required controller types")
 
-    normalized_authorities = set(contract.authority_boundaries)
-    if AgentAuthority.READ_CONTEXT not in normalized_authorities:
+    normalized = set(contract.authority_boundaries)
+    if AgentAuthority.READ_CONTEXT not in normalized:
         raise AIContractError("agent contract must explicitly allow scoped context reads")
     if contract.contract_key.startswith("ai.specialist."):
         forbidden = {
             AgentAuthority.PROPOSE_DECISION_CANDIDATE,
             AgentAuthority.REVIEW_DECISION_CANDIDATE,
+            AgentAuthority.PROPOSE_CONTENT_STRATEGY,
+            AgentAuthority.PROPOSE_ASSET_DRAFT,
+            AgentAuthority.REVIEW_ASSET_VERSION,
         }
-        if normalized_authorities & forbidden:
-            raise AIContractError(
-                "specialist contract cannot acquire chief or controller authority"
-            )
-    if (
-        contract.contract_key.startswith("ai.chief.")
-        and AgentAuthority.REVIEW_DECISION_CANDIDATE in normalized_authorities
-    ):
-        raise AIContractError("chief contract cannot acquire controller authority")
+        if normalized & forbidden:
+            raise AIContractError("specialist contract cannot acquire other-role authority")
+    if contract.contract_key.startswith("ai.chief."):
+        forbidden = {
+            AgentAuthority.REVIEW_DECISION_CANDIDATE,
+            AgentAuthority.PROPOSE_CONTENT_STRATEGY,
+            AgentAuthority.PROPOSE_ASSET_DRAFT,
+            AgentAuthority.REVIEW_ASSET_VERSION,
+        }
+        if normalized & forbidden:
+            raise AIContractError("chief contract cannot acquire controller/production authority")
     if contract.contract_key.startswith("ai.controller."):
         forbidden = {
             AgentAuthority.PROPOSE_RECOMMENDATION,
             AgentAuthority.PROPOSE_DECISION_CANDIDATE,
+            AgentAuthority.PROPOSE_CONTENT_STRATEGY,
+            AgentAuthority.PROPOSE_ASSET_DRAFT,
         }
-        if normalized_authorities & forbidden:
-            raise AIContractError(
-                "controller contract cannot acquire specialist or chief authority"
-            )
+        if normalized & forbidden:
+            raise AIContractError("controller contract cannot acquire proposal authority")
+    if contract.contract_key == "ai.production.content_director":
+        allowed = {
+            AgentAuthority.READ_CONTEXT,
+            AgentAuthority.PROPOSE_CONTENT_STRATEGY,
+        }
+        if not normalized <= allowed:
+            raise AIContractError("content director authority must be default-deny")
+    if contract.contract_key == "ai.production.telegram_writer":
+        allowed = {
+            AgentAuthority.READ_CONTEXT,
+            AgentAuthority.PROPOSE_ASSET_DRAFT,
+        }
+        if not normalized <= allowed:
+            raise AIContractError("telegram writer authority must be default-deny")

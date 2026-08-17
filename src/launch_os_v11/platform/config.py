@@ -29,6 +29,10 @@ class Settings(BaseSettings):
         default=2,
         alias="LAUNCH_OS_MAX_DECISION_REVISION_ROUNDS",
     )
+    max_asset_revision_rounds: int = Field(
+        default=2,
+        alias="LAUNCH_OS_MAX_ASSET_REVISION_ROUNDS",
+    )
     ai_model_provider: str | None = Field(default=None, alias="LAUNCH_OS_AI_MODEL_PROVIDER")
     ai_openai_text_model: str | None = Field(
         default=None,
