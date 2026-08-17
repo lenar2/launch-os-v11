@@ -47,7 +47,7 @@ class OpenAIResponsesAdapter:
         start_monotonic = perf_counter()
         try:
             response = self._client.responses.parse(
-                model=self.model_name,
+                model=request.selected_model_name,
                 instructions=request.system_instructions,
                 input=[
                     {
@@ -70,7 +70,7 @@ class OpenAIResponsesAdapter:
         completed_at = datetime.now(tz=UTC)
         metadata = ProviderMetadata(
             provider_name=self.provider_name,
-            model_name=self.model_name,
+            model_name=request.selected_model_name,
             response_id=_response_id(response),
             token_usage=_token_usage(response),
             latency_ms=int((perf_counter() - start_monotonic) * 1000),

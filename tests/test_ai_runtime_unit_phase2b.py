@@ -21,7 +21,12 @@ from launch_os_v11.ai_runtime.composition import (
     model_router_from_settings,
 )
 from launch_os_v11.ai_runtime.context import ContextBudget, ContextBuilder, ContextReference
-from launch_os_v11.ai_runtime.contracts import AgentRunStatus, ModelCapability, ModelResultKind
+from launch_os_v11.ai_runtime.contracts import (
+    AgentAuthority,
+    AgentRunStatus,
+    ModelCapability,
+    ModelResultKind,
+)
 from launch_os_v11.ai_runtime.errors import (
     AIConfigurationError,
     AIContextError,
@@ -132,7 +137,7 @@ def test_agent_registry_enforces_exact_version_integrity_and_no_vendor_model(
     with pytest.raises(AIContractError):
         replace(contract, mission="")
     with pytest.raises(AIContractError):
-        replace(contract, authority_boundaries=("READ_SCOPED_CONTEXT_ONLY", "CAN_WRITE"))
+        replace(contract, authority_boundaries=(AgentAuthority.PROPOSE_ANALYSIS,))
 
     payload = json.dumps(contract.definition_payload(), sort_keys=True).lower()
     assert "gpt" not in payload
@@ -274,14 +279,23 @@ def test_strict_output_schemas_preserve_truth_boundaries_and_refusal_outcome() -
         hypotheses=[],
         unknowns=[],
         expected_effect="More replies",
+        confidence=0.6,
         reversibility="easy",
         risk_class=RiskClass.LOW,
         experiment_proposal=ExperimentProposal(
             hypothesis="Message clarity changes reply rate",
+            baseline="Current message",
+            segment="qualified audience",
+            treatment="Clearer message",
             metric="reply_rate",
             window="7d",
+            attribution_method="observational",
             success_threshold="10 replies",
+            weak_signal_threshold="3 replies",
             failure_threshold="0 replies",
+            next_action_on_success="continue",
+            next_action_on_weak_signal="revise",
+            next_action_on_failure="stop",
         ),
         required_assets=[],
         required_actions=[],
@@ -340,12 +354,11 @@ def test_model_router_and_fake_adapter_are_deterministic_and_typed() -> None:
     first = router.resolve(ModelCapability.FAST_STRUCTURED_CLASSIFICATION)
     second = router.resolve(ModelCapability.FAST_STRUCTURED_CLASSIFICATION)
     assert first == second
-    assert router.route_matrix() == {
-        "FAST_STRUCTURED_CLASSIFICATION": {
-            "provider": "fake",
-            "model": "fake-structured-model",
-        }
+    assert router.route_matrix()["FAST_STRUCTURED_CLASSIFICATION"] == {
+        "provider": "fake",
+        "model": "fake-structured-model",
     }
+    assert set(router.route_matrix()) == {capability.value for capability in ModelCapability}
 
     result = first.adapter.invoke(_model_request())
     assert isinstance(result.parsed_output, RuntimeProbeOutput)
@@ -373,7 +386,7 @@ def test_openai_adapter_uses_responses_parse_without_tools_and_handles_outcomes(
         usage=SimpleNamespace(input_tokens=2, output_tokens=3, total_tokens=5),
     )
     client = FakeResponsesClient(response=response)
-    request = _model_request()
+    request = _model_request(provider_name="openai", model_name="configured-openai-model")
 
     result = OpenAIResponsesAdapter(
         api_key=None,
@@ -722,10 +735,16 @@ def test_agent_run_context_cannot_escape_job_scope(engine: Engine) -> None:
         session.close()
 
 
-def _model_request() -> Any:
+def _model_request(
+    *,
+    provider_name: str = "fake",
+    model_name: str = "fake-structured-model",
+) -> Any:
     contract = runtime_probe_contract()
     return SimpleNamespace(
         capability=ModelCapability.FAST_STRUCTURED_CLASSIFICATION,
+        selected_provider_name=provider_name,
+        selected_model_name=model_name,
         system_instructions=contract.system_instructions,
         instruction_version=contract.instruction_version,
         structured_context='{"schema_name":"AgentScopedContext","items":[]}',

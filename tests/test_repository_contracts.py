@@ -104,6 +104,7 @@ def _agent_run_model(
         context_manifest={},
         token_usage={},
         safe_trace_metadata={},
+        idempotency_key=f"{prefix}-agent-run-key-{suffix}",
     )
 
 
@@ -279,6 +280,54 @@ def _seed_dependencies(session: Session, scope: TenantScope, suffix: str) -> dic
         created_at=now,
     )
     agent_definition = _agent_definition_model(scope, suffix=suffix, prefix="dep")
+    specialist_agent_run = _agent_run_model(
+        scope,
+        suffix=f"{suffix}-specialist",
+        prefix="dep",
+        agent_definition_id=agent_definition.id,
+    )
+    chief_agent_run = _agent_run_model(
+        scope,
+        suffix=f"{suffix}-chief",
+        prefix="dep",
+        agent_definition_id=agent_definition.id,
+    )
+    approval_chief_agent_run = _agent_run_model(
+        scope,
+        suffix=f"{suffix}-approval-chief",
+        prefix="dep",
+        agent_definition_id=agent_definition.id,
+    )
+    workflow = models.DecisionWorkflowModel(
+        id=f"dep-workflow-{suffix}",
+        organization_id=scope.organization_id,
+        business_id=scope.business_id,
+        launch_id=launch.id,
+        snapshot_id=snapshot.id,
+        status="SNAPSHOT_READY",
+        revision_count=0,
+        max_revision_rounds=2,
+    )
+    approval_candidate = models.DecisionCandidateModel(
+        id=f"dep-candidate-{suffix}",
+        organization_id=scope.organization_id,
+        business_id=scope.business_id,
+        workflow_id=workflow.id,
+        snapshot_id=snapshot.id,
+        chief_agent_run_id=approval_chief_agent_run.id,
+        version_number=1,
+        revision_round=0,
+        status="CANDIDATE",
+        schema_version=1,
+        selected_action="Candidate",
+        payload={"selected_action": "Candidate"},
+        evidence_refs=[],
+        specialist_contribution_ids=[],
+        controller_review_ids=[],
+        context_hash="b" * 64,
+        context_manifest={},
+        created_at=now,
+    )
     session.add_all(
         [
             user,
@@ -301,6 +350,11 @@ def _seed_dependencies(session: Session, scope: TenantScope, suffix: str) -> dic
             action,
             approval,
             agent_definition,
+            specialist_agent_run,
+            chief_agent_run,
+            approval_chief_agent_run,
+            workflow,
+            approval_candidate,
         ]
     )
     session.flush()
@@ -323,6 +377,10 @@ def _seed_dependencies(session: Session, scope: TenantScope, suffix: str) -> dic
         "action": action.id,
         "approval": approval.id,
         "agent_definition": agent_definition.id,
+        "specialist_agent_run": specialist_agent_run.id,
+        "chief_agent_run": chief_agent_run.id,
+        "workflow": workflow.id,
+        "approval_candidate": approval_candidate.id,
     }
 
 
@@ -554,6 +612,87 @@ def _row_factories() -> list[tuple[type[Any], RowFactory, bool]]:
                 reason="Ok",
             ),
             True,
+        ),
+        (
+            models.DecisionWorkflowModel,
+            lambda scope, suffix, dep: models.DecisionWorkflowModel(
+                id=f"row-workflow-{suffix}",
+                organization_id=scope.organization_id,
+                business_id=scope.business_id,
+                launch_id=dep["launch"],
+                snapshot_id=dep["snapshot"],
+                status="SNAPSHOT_READY",
+                revision_count=0,
+                max_revision_rounds=2,
+                correlation_id=f"corr-workflow-{suffix}",
+            ),
+            True,
+        ),
+        (
+            models.SpecialistContributionModel,
+            lambda scope, suffix, dep: models.SpecialistContributionModel(
+                id=f"row-contribution-{suffix}",
+                organization_id=scope.organization_id,
+                business_id=scope.business_id,
+                workflow_id=dep["workflow"],
+                snapshot_id=dep["snapshot"],
+                agent_run_id=dep["specialist_agent_run"],
+                contract_key=f"ai.specialist.{suffix}",
+                contract_version=1,
+                instruction_version="instructions.v1",
+                schema_version=1,
+                role="Audience Intelligence",
+                payload={"role": "Audience Intelligence"},
+                evidence_refs=[],
+                context_hash="c" * 64,
+                context_manifest={},
+                created_at=now,
+            ),
+            False,
+        ),
+        (
+            models.DecisionCandidateModel,
+            lambda scope, suffix, dep: models.DecisionCandidateModel(
+                id=f"row-candidate-{suffix}",
+                organization_id=scope.organization_id,
+                business_id=scope.business_id,
+                workflow_id=dep["workflow"],
+                snapshot_id=dep["snapshot"],
+                chief_agent_run_id=dep["chief_agent_run"],
+                version_number=2,
+                revision_round=1,
+                status="CANDIDATE",
+                schema_version=1,
+                selected_action="Candidate",
+                payload={"selected_action": "Candidate"},
+                evidence_refs=[],
+                specialist_contribution_ids=[],
+                controller_review_ids=[],
+                context_hash="d" * 64,
+                context_manifest={},
+                created_at=now,
+            ),
+            False,
+        ),
+        (
+            models.DecisionApprovalModel,
+            lambda scope, suffix, dep: models.DecisionApprovalModel(
+                id=f"row-decision-approval-{suffix}",
+                organization_id=scope.organization_id,
+                business_id=scope.business_id,
+                workflow_id=dep["workflow"],
+                decision_id=dep["decision"],
+                candidate_id=dep["approval_candidate"],
+                action_type="approve_decision_for_production",
+                object_type="Decision",
+                object_id=dep["decision"],
+                object_version_id=dep["decision"],
+                object_version=1,
+                approved_by_user_id=dep["user"],
+                status=ApprovalStatus.APPROVED.value,
+                created_at=now,
+            ),
+            False,
         ),
         (
             models.ExperimentModel,

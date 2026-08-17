@@ -26,6 +26,15 @@ class ModelCapability(StrEnum):
     EMBEDDINGS = "EMBEDDINGS"
 
 
+class AgentAuthority(StrEnum):
+    READ_CONTEXT = "READ_CONTEXT"
+    PROPOSE_ANALYSIS = "PROPOSE_ANALYSIS"
+    PROPOSE_RECOMMENDATION = "PROPOSE_RECOMMENDATION"
+    PROPOSE_DECISION_CANDIDATE = "PROPOSE_DECISION_CANDIDATE"
+    REVIEW_DECISION_CANDIDATE = "REVIEW_DECISION_CANDIDATE"
+    PROPOSE_EXPERIMENT = "PROPOSE_EXPERIMENT"
+
+
 class AgentRunStatus(StrEnum):
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
@@ -71,6 +80,8 @@ class ProviderMetadata:
 @dataclass(frozen=True)
 class ModelRequest(Generic[OutputModelT]):
     capability: ModelCapability
+    selected_provider_name: str
+    selected_model_name: str
     system_instructions: str
     instruction_version: str
     structured_context: str
@@ -104,7 +115,7 @@ class AgentContract:
     output_schema_version: int
     output_model: type[BaseModel]
     model_capability: ModelCapability
-    authority_boundaries: tuple[str, ...]
+    authority_boundaries: tuple[AgentAuthority, ...]
     prohibited_actions: tuple[str, ...]
     required_controller_types: tuple[str, ...]
     abstention_policy: str
@@ -134,7 +145,7 @@ class AgentContract:
             "output_schema_name": self.output_schema_name,
             "output_schema_version": self.output_schema_version,
             "model_capability": self.model_capability.value,
-            "authority_boundaries": list(self.authority_boundaries),
+            "authority_boundaries": [authority.value for authority in self.authority_boundaries],
             "prohibited_actions": list(self.prohibited_actions),
             "required_controller_types": list(self.required_controller_types),
             "abstention_policy": self.abstention_policy,
@@ -172,31 +183,35 @@ def _validate_contract(contract: AgentContract) -> None:
     if not set(contract.required_context_types).issubset(set(contract.allowed_context_types)):
         raise AIContractError("required context types must be a subset of allowed context types")
     if not contract.authority_boundaries:
-        raise AIContractError("agent contract must declare authority boundaries")
+        raise AIContractError("agent contract must declare positive allowed authorities")
     if not contract.prohibited_actions:
         raise AIContractError("agent contract must declare prohibited actions")
     if not contract.required_controller_types:
         raise AIContractError("agent contract must declare required controller types")
 
-    write_authority_markers = {
-        "CAN_WRITE",
-        "EXTERNAL_WRITE",
-        "CONNECTOR_WRITE",
-        "EXECUTION_WRITE",
-        "HAS_CREDENTIALS",
-        "TOOL_WRITE",
-        "DIRECT_CONNECTOR",
-    }
-    normalized_boundaries = {value.strip().upper() for value in contract.authority_boundaries}
-    if normalized_boundaries & write_authority_markers:
-        raise AIContractError(
-            "agent contract cannot grant write, connector, or credential authority"
-        )
-
-    joined_actions = " ".join(contract.prohibited_actions).lower()
-    for required_prohibition in ("external write", "connector", "credential"):
-        if required_prohibition not in joined_actions:
+    normalized_authorities = set(contract.authority_boundaries)
+    if AgentAuthority.READ_CONTEXT not in normalized_authorities:
+        raise AIContractError("agent contract must explicitly allow scoped context reads")
+    if contract.contract_key.startswith("ai.specialist."):
+        forbidden = {
+            AgentAuthority.PROPOSE_DECISION_CANDIDATE,
+            AgentAuthority.REVIEW_DECISION_CANDIDATE,
+        }
+        if normalized_authorities & forbidden:
             raise AIContractError(
-                "agent contract must explicitly prohibit external writes, "
-                "connectors, and credentials"
+                "specialist contract cannot acquire chief or controller authority"
+            )
+    if (
+        contract.contract_key.startswith("ai.chief.")
+        and AgentAuthority.REVIEW_DECISION_CANDIDATE in normalized_authorities
+    ):
+        raise AIContractError("chief contract cannot acquire controller authority")
+    if contract.contract_key.startswith("ai.controller."):
+        forbidden = {
+            AgentAuthority.PROPOSE_RECOMMENDATION,
+            AgentAuthority.PROPOSE_DECISION_CANDIDATE,
+        }
+        if normalized_authorities & forbidden:
+            raise AIContractError(
+                "controller contract cannot acquire specialist or chief authority"
             )

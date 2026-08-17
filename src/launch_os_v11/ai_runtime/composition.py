@@ -10,7 +10,7 @@ from launch_os_v11.ai_runtime.job_handler import AgentRunJobHandler
 from launch_os_v11.ai_runtime.registry import AgentRegistry, default_agent_registry
 from launch_os_v11.ai_runtime.router import ModelRoute, ModelRouter
 from launch_os_v11.platform.config import Settings
-from launch_os_v11.runtime.contracts import JOB_TYPE_AI_RUN_AGENT
+from launch_os_v11.runtime.contracts import JOB_TYPE_AI_RUN_AGENT, JOB_TYPE_AI_RUN_CONTROLLER
 from launch_os_v11.runtime.handlers import JobHandler, default_handler_registry
 
 
@@ -24,11 +24,13 @@ def compose_handler_registry(
     handlers = default_handler_registry()
     if not settings.ai_team_enabled and model_router is None:
         return handlers
-    handlers[JOB_TYPE_AI_RUN_AGENT] = AgentRunJobHandler(
+    ai_handler = AgentRunJobHandler(
         registry=registry or default_agent_registry(),
         context_builder=context_builder or ContextBuilder(),
         model_router=model_router or model_router_from_settings(settings),
     )
+    handlers[JOB_TYPE_AI_RUN_AGENT] = ai_handler
+    handlers[JOB_TYPE_AI_RUN_CONTROLLER] = ai_handler
     return handlers
 
 
@@ -73,13 +75,15 @@ def model_router_from_settings(settings: Settings) -> ModelRouter:
 
 
 def fake_model_router(adapter: ModelAdapter[BaseModel]) -> ModelRouter:
+    model_name = getattr(adapter, "model_name", "fake-structured-model")
     return ModelRouter(
         routes={
-            ModelCapability.FAST_STRUCTURED_CLASSIFICATION: ModelRoute(
-                capability=ModelCapability.FAST_STRUCTURED_CLASSIFICATION,
+            capability: ModelRoute(
+                capability=capability,
                 provider_name=adapter.provider_name,
-                model_name="fake-structured-model",
+                model_name=model_name,
             )
+            for capability in ModelCapability
         },
         adapters={adapter.provider_name: adapter},
     )

@@ -30,6 +30,11 @@ class ModelRouter:
         routes: dict[ModelCapability, ModelRoute],
         adapters: dict[str, ModelAdapter[BaseModel]],
     ) -> None:
+        for capability, route in routes.items():
+            if route.capability != capability:
+                raise AIConfigurationError(
+                    f"model route capability mismatch for {capability.value}"
+                )
         self._routes = MappingProxyType(dict(routes))
         self._adapters = MappingProxyType(dict(adapters))
 

@@ -56,6 +56,9 @@ EXPECTED_TABLES = {
     "launch_phases",
     "decisions",
     "decision_alternatives",
+    "decision_approvals",
+    "decision_candidates",
+    "decision_workflows",
     "controller_reviews",
     "experiments",
     "experiment_rules",
@@ -73,6 +76,7 @@ EXPECTED_TABLES = {
     "jobs",
     "agent_definitions",
     "agent_runs",
+    "specialist_contributions",
     "audit_logs",
     "feature_flags",
     "learnings",
@@ -99,6 +103,9 @@ TENANT_SCOPED_TABLES = {
     "launch_phases",
     "decisions",
     "decision_alternatives",
+    "decision_approvals",
+    "decision_candidates",
+    "decision_workflows",
     "controller_reviews",
     "experiments",
     "experiment_rules",
@@ -116,6 +123,7 @@ TENANT_SCOPED_TABLES = {
     "jobs",
     "agent_definitions",
     "agent_runs",
+    "specialist_contributions",
     "audit_logs",
     "feature_flags",
     "learnings",
@@ -140,8 +148,24 @@ EXPECTED_FOREIGN_KEYS: set[ForeignKeyPair] = (
         ("launch_phases", "launch_id", "launches", "id"),
         ("decisions", "snapshot_id", "business_snapshots", "id"),
         ("decisions", "supersedes_decision_id", "decisions", "id"),
+        ("decisions", "source_candidate_id", "decision_candidates", "id"),
         ("decision_alternatives", "decision_id", "decisions", "id"),
+        ("decision_approvals", "approved_by_user_id", "users", "id"),
+        ("decision_approvals", "candidate_id", "decision_candidates", "id"),
+        ("decision_approvals", "decision_id", "decisions", "id"),
+        ("decision_approvals", "workflow_id", "decision_workflows", "id"),
+        ("decision_candidates", "chief_agent_run_id", "agent_runs", "id"),
+        ("decision_candidates", "previous_candidate_id", "decision_candidates", "id"),
+        ("decision_candidates", "snapshot_id", "business_snapshots", "id"),
+        ("decision_candidates", "workflow_id", "decision_workflows", "id"),
+        ("decision_workflows", "final_approval_id", "decision_approvals", "id"),
+        ("decision_workflows", "final_decision_id", "decisions", "id"),
+        ("decision_workflows", "launch_id", "launches", "id"),
+        ("decision_workflows", "snapshot_id", "business_snapshots", "id"),
         ("controller_reviews", "decision_id", "decisions", "id"),
+        ("controller_reviews", "agent_run_id", "agent_runs", "id"),
+        ("controller_reviews", "decision_candidate_id", "decision_candidates", "id"),
+        ("controller_reviews", "snapshot_id", "business_snapshots", "id"),
         ("experiments", "decision_id", "decisions", "id"),
         ("experiments", "hypothesis_id", "hypotheses", "id"),
         ("experiment_rules", "experiment_id", "experiments", "id"),
@@ -158,6 +182,9 @@ EXPECTED_FOREIGN_KEYS: set[ForeignKeyPair] = (
         ("business_events", "source_record_id", "source_records", "id"),
         ("agent_runs", "agent_definition_id", "agent_definitions", "id"),
         ("agent_runs", "job_id", "jobs", "id"),
+        ("specialist_contributions", "agent_run_id", "agent_runs", "id"),
+        ("specialist_contributions", "snapshot_id", "business_snapshots", "id"),
+        ("specialist_contributions", "workflow_id", "decision_workflows", "id"),
         ("learnings", "decision_id", "decisions", "id"),
         ("learnings", "experiment_id", "experiments", "id"),
     }
@@ -249,6 +276,7 @@ def _assert_schema_contract(database_url: str) -> None:
         assert "ix_agent_runs_job_id" in agent_run_indexes
         assert "ix_agent_runs_context_hash" in agent_run_indexes
         assert "ix_agent_runs_provider_response_id" in agent_run_indexes
+        assert "ix_agent_runs_idempotency_key" in agent_run_indexes
         agent_run_checks = {
             constraint["name"] for constraint in inspector.get_check_constraints("agent_runs")
         }
@@ -256,6 +284,23 @@ def _assert_schema_contract(database_url: str) -> None:
         assert "ck_agent_runs_payload_schema_positive" in agent_run_checks
         assert "ck_agent_runs_contract_version_positive" in agent_run_checks
         assert "ck_agent_runs_output_schema_version_positive" in agent_run_checks
+
+        workflow_checks = {
+            constraint["name"]
+            for constraint in inspector.get_check_constraints("decision_workflows")
+        }
+        assert "ck_decision_workflows_status_phase3" in workflow_checks
+        candidate_uniques = {
+            tuple(constraint["column_names"])
+            for constraint in inspector.get_unique_constraints("decision_candidates")
+        }
+        assert ("workflow_id", "version_number") in candidate_uniques
+        assert ("chief_agent_run_id",) in candidate_uniques
+        approval_uniques = {
+            tuple(constraint["column_names"])
+            for constraint in inspector.get_unique_constraints("decision_approvals")
+        }
+        assert ("decision_id", "action_type", "object_version_id") in approval_uniques
     finally:
         engine.dispose()
 

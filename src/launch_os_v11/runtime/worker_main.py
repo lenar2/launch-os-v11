@@ -3,7 +3,7 @@ from __future__ import annotations
 import signal
 from threading import Event
 
-from launch_os_v11.ai_runtime.composition import compose_handler_registry
+from launch_os_v11.application.composition import compose_application_handler_registry
 from launch_os_v11.persistence.session import create_engine_from_settings, create_session_factory
 from launch_os_v11.platform.config import get_settings
 from launch_os_v11.runtime.transport import create_redis_job_queue
@@ -28,7 +28,7 @@ def main() -> None:
         session_factory=factory,
         queue=queue,
         worker_id="runtime-worker",
-        handlers=compose_handler_registry(settings=settings),
+        handlers=compose_application_handler_registry(settings=settings, queue=queue),
     )
     try:
         worker.run_forever(stop_event=stop_event)

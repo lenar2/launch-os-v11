@@ -40,6 +40,7 @@ markers = [
   "postgres: requires LAUNCH_OS_TEST_DATABASE_URL against a PostgreSQL 16 database",
   "runtime: requires LAUNCH_OS_TEST_DATABASE_URL and Redis for Phase 2A runtime tests",
   "ai_runtime: requires LAUNCH_OS_TEST_DATABASE_URL and Redis for Phase 2B fake AI runtime tests",
+  "decision_workflow: requires LAUNCH_OS_TEST_DATABASE_URL and Redis for Phase 3 decision workflow tests",
 ]
 
 [tool.ruff]

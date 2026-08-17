@@ -288,6 +288,23 @@ class DecisionModel(BusinessScopedMixin, Base):
     evidence_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     assumption_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     known_unknown_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    source_candidate_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey(
+            "decision_candidates.id",
+            name="fk_decisions_source_candidate_id_decision_candidates",
+            use_alter=True,
+        ),
+        index=True,
+    )
+    why_alternatives_not_selected: Mapped[list[str]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
+    hypotheses: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    assumptions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    experiment_proposal: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    required_assets: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    required_actions: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
 
 
 class DecisionAlternativeModel(BusinessScopedMixin, Base):
@@ -312,6 +329,180 @@ class ControllerReviewModel(BusinessScopedMixin, Base):
     controller_name: Mapped[str] = mapped_column(String(128), nullable=False)
     verdict: Mapped[str] = mapped_column(String(64), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
+    decision_candidate_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("decision_candidates.id"), index=True
+    )
+    agent_run_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("agent_runs.id"), index=True
+    )
+    snapshot_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("business_snapshots.id"), index=True
+    )
+    controller_type: Mapped[str | None] = mapped_column(String(128), index=True)
+    contract_key: Mapped[str | None] = mapped_column(String(128))
+    contract_version: Mapped[int | None] = mapped_column(Integer)
+    instruction_version: Mapped[str | None] = mapped_column(String(128))
+    output_schema_version: Mapped[int | None] = mapped_column(Integer)
+    context_hash: Mapped[str | None] = mapped_column(String(64))
+    context_manifest: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    severity: Mapped[str | None] = mapped_column(String(64))
+    issues: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    required_changes: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    evidence_refs: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    conditions: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    correlation_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    causation_id: Mapped[str | None] = mapped_column(String(64), index=True)
+
+
+class DecisionWorkflowModel(BusinessScopedMixin, Base):
+    __tablename__ = "decision_workflows"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('SNAPSHOT_READY', 'SPECIALISTS_RUNNING', 'SPECIALISTS_READY', "
+            "'CHIEF_RUNNING', 'DECISION_CANDIDATE_READY', 'CONTROLLERS_RUNNING', "
+            "'BLOCKED', 'REVISION_REQUIRED', 'CANDIDATE_ACCEPTED', "
+            "'FINAL_DECISION_MATERIALIZED', 'AWAITING_DECISION_APPROVAL', "
+            "'APPROVED_FOR_PRODUCTION', 'ESCALATED')",
+            name="ck_decision_workflows_status_phase3",
+        ),
+        CheckConstraint(
+            "revision_count >= 0",
+            name="ck_decision_workflows_revision_count_nonnegative",
+        ),
+        CheckConstraint(
+            "max_revision_rounds >= 0",
+            name="ck_decision_workflows_max_revision_rounds_nonnegative",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    launch_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("launches.id"), index=True
+    )
+    snapshot_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("business_snapshots.id"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    revision_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_revision_rounds: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    final_decision_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey(
+            "decisions.id",
+            name="fk_decision_workflows_final_decision_id_decisions",
+            use_alter=True,
+        ),
+        index=True,
+    )
+    final_approval_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey(
+            "decision_approvals.id",
+            name="fk_decision_workflows_final_approval_id_decision_approvals",
+            use_alter=True,
+        ),
+        index=True,
+    )
+    correlation_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    causation_id: Mapped[str | None] = mapped_column(String(64), index=True)
+
+
+class SpecialistContributionModel(Base):
+    __tablename__ = "specialist_contributions"
+    __table_args__ = (
+        UniqueConstraint(
+            "workflow_id",
+            "contract_key",
+            "contract_version",
+            name="uq_specialist_contribution_workflow_contract",
+        ),
+        UniqueConstraint("agent_run_id", name="uq_specialist_contributions_agent_run"),
+        CheckConstraint("schema_version >= 1", name="ck_specialist_contributions_schema_version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    business_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("businesses.id"), nullable=False, index=True
+    )
+    workflow_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("decision_workflows.id"), nullable=False, index=True
+    )
+    snapshot_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("business_snapshots.id"), nullable=False, index=True
+    )
+    agent_run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_runs.id"), nullable=False, index=True
+    )
+    contract_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    instruction_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    evidence_refs: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    context_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    context_manifest: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    correlation_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    causation_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
+class DecisionCandidateModel(Base):
+    __tablename__ = "decision_candidates"
+    __table_args__ = (
+        UniqueConstraint("workflow_id", "version_number", name="uq_candidate_workflow_version"),
+        UniqueConstraint("chief_agent_run_id", name="uq_candidate_agent_run"),
+        CheckConstraint("version_number >= 1", name="ck_decision_candidates_version_positive"),
+        CheckConstraint("schema_version >= 1", name="ck_decision_candidates_schema_version"),
+        CheckConstraint(
+            "status in ('CANDIDATE', 'UNDER_REVIEW', 'REVISION_REQUIRED', "
+            "'BLOCKED', 'ACCEPTED', 'MATERIALIZED')",
+            name="ck_decision_candidates_status_phase3",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    business_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("businesses.id"), nullable=False, index=True
+    )
+    workflow_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("decision_workflows.id"), nullable=False, index=True
+    )
+    snapshot_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("business_snapshots.id"), nullable=False, index=True
+    )
+    chief_agent_run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_runs.id"), nullable=False, index=True
+    )
+    previous_candidate_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("decision_candidates.id"), index=True
+    )
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    revision_round: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    selected_action: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    evidence_refs: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    specialist_contribution_ids: Mapped[list[str]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
+    controller_review_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    context_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    context_manifest: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    correlation_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    causation_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
 
 
 class ExperimentModel(BusinessScopedMixin, Base):
@@ -481,6 +672,48 @@ class ApprovalModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class DecisionApprovalModel(Base):
+    __tablename__ = "decision_approvals"
+    __table_args__ = (
+        UniqueConstraint(
+            "decision_id",
+            "action_type",
+            "object_version_id",
+            name="uq_decision_approval_exact_version_action",
+        ),
+        CheckConstraint("object_version >= 1", name="ck_decision_approvals_version_positive"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    business_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("businesses.id"), nullable=False, index=True
+    )
+    workflow_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("decision_workflows.id"), nullable=False, index=True
+    )
+    decision_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("decisions.id"), nullable=False, index=True
+    )
+    candidate_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("decision_candidates.id"), nullable=False, index=True
+    )
+    action_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    object_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    object_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    object_version_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    object_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    approved_by_user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    correlation_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    causation_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ExecutionModel(BusinessScopedMixin, Base):
     __tablename__ = "executions"
 
@@ -627,6 +860,12 @@ class AgentDefinitionModel(BusinessScopedMixin, Base):
 class AgentRunModel(BusinessScopedMixin, Base):
     __tablename__ = "agent_runs"
     __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "business_id",
+            "idempotency_key",
+            name="uq_agent_runs_tenant_idempotency",
+        ),
         CheckConstraint(
             "status in ('QUEUED', 'RUNNING', 'RETRY_WAIT', 'SUCCEEDED', "
             "'REFUSED', 'INVALID_OUTPUT', 'FAILED')",
@@ -677,6 +916,7 @@ class AgentRunModel(BusinessScopedMixin, Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     correlation_id: Mapped[str | None] = mapped_column(String(64), index=True)
     causation_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), index=True)
 
 
 class AuditLogModel(BusinessScopedMixin, Base):

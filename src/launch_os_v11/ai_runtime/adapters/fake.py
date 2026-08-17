@@ -51,9 +51,11 @@ class FakeModelAdapter(Generic[OutputModelT]):
         started_at = datetime.now(tz=UTC)
         completed_at = datetime.now(tz=UTC)
         step = self._script.pop(0) if self._script else _default_success_step()
+        model_name = request.selected_model_name or self.model_name
+        provider_name = request.selected_provider_name or self.provider_name
         metadata = ProviderMetadata(
-            provider_name=self.provider_name,
-            model_name=self.model_name,
+            provider_name=provider_name,
+            model_name=model_name,
             response_id=f"fake-response-{self.call_count}",
             token_usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
             latency_ms=0,

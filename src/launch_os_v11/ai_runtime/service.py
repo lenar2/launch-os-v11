@@ -29,6 +29,7 @@ TERMINAL_AGENT_RUN_STATUSES = {
 class AgentRunCreationResult:
     agent_run: AgentRunModel
     job_id: str
+    created: bool
 
 
 class AgentRunService:
@@ -54,6 +55,8 @@ class AgentRunService:
         context_refs: tuple[ContextReference, ...] = (),
         correlation_id: str | None = None,
         causation_id: str | None = None,
+        job_type: str = JOB_TYPE_AI_RUN_AGENT,
+        idempotency_key: str | None = None,
     ) -> AgentRunCreationResult:
         contract = self._registry.resolve(
             contract_key=contract_key,
@@ -64,6 +67,22 @@ class AgentRunService:
             scope=scope,
             contract=contract,
         )
+        if idempotency_key is not None:
+            existing = session.scalar(
+                select(AgentRunModel).where(
+                    AgentRunModel.organization_id == scope.organization_id,
+                    AgentRunModel.business_id == scope.business_id,
+                    AgentRunModel.idempotency_key == idempotency_key,
+                )
+            )
+            if existing is not None:
+                if existing.job_id is None:
+                    raise AIContractError("idempotent AgentRun exists without a Job binding")
+                return AgentRunCreationResult(
+                    agent_run=existing,
+                    job_id=existing.job_id,
+                    created=False,
+                )
         run_id = new_id()
         run = AgentRunModel(
             id=run_id,
@@ -96,13 +115,14 @@ class AgentRunService:
             completed_at=None,
             correlation_id=correlation_id,
             causation_id=causation_id,
+            idempotency_key=idempotency_key,
         )
         session.add(run)
         session.flush()
         job = create_job(
             session,
             scope=scope,
-            job_type=JOB_TYPE_AI_RUN_AGENT,
+            job_type=job_type,
             payload={"agent_run_id": run.id, "payload_schema_version": 1},
             payload_schema_version=1,
             idempotency_key=f"agent_run:{run.id}",
@@ -114,7 +134,7 @@ class AgentRunService:
         run.job_id = job.id
         session.flush()
         self._queue.enqueue(job.id)
-        return AgentRunCreationResult(agent_run=run, job_id=job.id)
+        return AgentRunCreationResult(agent_run=run, job_id=job.id, created=True)
 
 
 def ensure_agent_definition(
@@ -152,7 +172,7 @@ def ensure_agent_definition(
         model_capability=contract.model_capability.value,
         allowed_context_types=list(contract.allowed_context_types),
         required_context_types=list(contract.required_context_types),
-        authority_boundaries=list(contract.authority_boundaries),
+        authority_boundaries=[authority.value for authority in contract.authority_boundaries],
         prohibited_actions=list(contract.prohibited_actions),
         required_controller_types=list(contract.required_controller_types),
         abstention_policy=contract.abstention_policy,

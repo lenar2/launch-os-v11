@@ -162,11 +162,32 @@ _REFERENCE_POLICY: dict[type[object], tuple[tuple[str, type[Any]], ...]] = {
     models.DecisionModel: (
         ("snapshot_id", models.BusinessSnapshotModel),
         ("supersedes_decision_id", models.DecisionModel),
+        ("source_candidate_id", models.DecisionCandidateModel),
     ),
     models.DecisionAlternativeModel: (("decision_id", models.DecisionModel),),
     models.ControllerReviewModel: (
         ("decision_id", models.DecisionModel),
         ("asset_version_id", models.AssetVersionModel),
+        ("decision_candidate_id", models.DecisionCandidateModel),
+        ("agent_run_id", models.AgentRunModel),
+        ("snapshot_id", models.BusinessSnapshotModel),
+    ),
+    models.DecisionWorkflowModel: (
+        ("launch_id", models.LaunchModel),
+        ("snapshot_id", models.BusinessSnapshotModel),
+        ("final_decision_id", models.DecisionModel),
+        ("final_approval_id", models.DecisionApprovalModel),
+    ),
+    models.SpecialistContributionModel: (
+        ("workflow_id", models.DecisionWorkflowModel),
+        ("snapshot_id", models.BusinessSnapshotModel),
+        ("agent_run_id", models.AgentRunModel),
+    ),
+    models.DecisionCandidateModel: (
+        ("workflow_id", models.DecisionWorkflowModel),
+        ("snapshot_id", models.BusinessSnapshotModel),
+        ("chief_agent_run_id", models.AgentRunModel),
+        ("previous_candidate_id", models.DecisionCandidateModel),
     ),
     models.ExperimentModel: (
         ("decision_id", models.DecisionModel),
@@ -182,6 +203,11 @@ _REFERENCE_POLICY: dict[type[object], tuple[tuple[str, type[Any]], ...]] = {
         ("channel_id", models.ChannelModel),
     ),
     models.ApprovalModel: (("action_id", models.ActionModel),),
+    models.DecisionApprovalModel: (
+        ("workflow_id", models.DecisionWorkflowModel),
+        ("decision_id", models.DecisionModel),
+        ("candidate_id", models.DecisionCandidateModel),
+    ),
     models.ExecutionModel: (
         ("action_id", models.ActionModel),
         ("approval_id", models.ApprovalModel),

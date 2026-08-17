@@ -20,7 +20,15 @@ class Settings(BaseSettings):
     )
     redis_url: str = Field(default="redis://localhost:6379/0", alias="LAUNCH_OS_REDIS_URL")
     log_level: str = Field(default="INFO", alias="LAUNCH_OS_LOG_LEVEL")
+    launch_workflow_enabled: bool = Field(
+        default=False,
+        alias="LAUNCH_OS_FEATURE_V11_LAUNCH_WORKFLOW",
+    )
     ai_team_enabled: bool = Field(default=False, alias="LAUNCH_OS_FEATURE_V11_AI_TEAM")
+    max_decision_revision_rounds: int = Field(
+        default=2,
+        alias="LAUNCH_OS_MAX_DECISION_REVISION_ROUNDS",
+    )
     ai_model_provider: str | None = Field(default=None, alias="LAUNCH_OS_AI_MODEL_PROVIDER")
     ai_openai_text_model: str | None = Field(
         default=None,

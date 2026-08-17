@@ -16,10 +16,14 @@ from launch_os_v11.domain.enums import EpistemicStatus, SourceTrust
 from launch_os_v11.domain.scope import TenantScope
 from launch_os_v11.persistence.models import (
     BusinessModel,
+    BusinessSnapshotModel,
     ConstraintModel,
+    ControllerReviewModel,
+    DecisionCandidateModel,
     EvidenceModel,
     GoalModel,
     SourceRecordModel,
+    SpecialistContributionModel,
 )
 from launch_os_v11.runtime.security import assert_no_secrets
 
@@ -274,6 +278,46 @@ class ContextBuilder:
                 business_id=evidence.business_id,
             )
             return _evidence_item(scope=scope, evidence=evidence, budget=self._budget)
+        if reference.object_type == "business_snapshot":
+            snapshot = session.get(BusinessSnapshotModel, reference.object_id)
+            if snapshot is None:
+                return None
+            scope.assert_matches(
+                organization_id=snapshot.organization_id,
+                business_id=snapshot.business_id,
+            )
+            return _snapshot_item(scope=scope, snapshot=snapshot, budget=self._budget)
+        if reference.object_type == "specialist_contribution":
+            contribution = session.get(SpecialistContributionModel, reference.object_id)
+            if contribution is None:
+                return None
+            scope.assert_matches(
+                organization_id=contribution.organization_id,
+                business_id=contribution.business_id,
+            )
+            return _specialist_contribution_item(
+                scope=scope,
+                contribution=contribution,
+                budget=self._budget,
+            )
+        if reference.object_type == "decision_candidate":
+            candidate = session.get(DecisionCandidateModel, reference.object_id)
+            if candidate is None:
+                return None
+            scope.assert_matches(
+                organization_id=candidate.organization_id,
+                business_id=candidate.business_id,
+            )
+            return _decision_candidate_item(scope=scope, candidate=candidate, budget=self._budget)
+        if reference.object_type == "controller_review":
+            review = session.get(ControllerReviewModel, reference.object_id)
+            if review is None:
+                return None
+            scope.assert_matches(
+                organization_id=review.organization_id,
+                business_id=review.business_id,
+            )
+            return _controller_review_item(scope=scope, review=review, budget=self._budget)
         raise AIContextError(f"unsupported context type: {reference.object_type}")
 
 
@@ -394,6 +438,138 @@ def _evidence_item(
             "confidence": evidence.confidence,
         },
         sensitivity="CONFIDENTIAL",
+    )
+
+
+def _snapshot_item(
+    *,
+    scope: TenantScope,
+    snapshot: BusinessSnapshotModel,
+    budget: ContextBudget,
+) -> ContextItem:
+    assert_no_secrets(snapshot.payload)
+    content = _truncate(
+        json.dumps(snapshot.payload, sort_keys=True, ensure_ascii=True),
+        budget.max_content_chars,
+    )
+    assert_no_secrets(content)
+    return ContextItem(
+        organization_id=scope.organization_id,
+        business_id=scope.business_id,
+        source_object_type="business_snapshot",
+        source_object_id=snapshot.id,
+        provenance_ref=f"business_snapshot:{snapshot.id}",
+        epistemic_status=EpistemicStatus.FACT,
+        trust_class=SourceTrust.INTERNAL_SYSTEM,
+        data_boundary="TRUSTED_INTERNAL_DATA",
+        occurred_at=snapshot.created_at,
+        recorded_at=snapshot.created_at,
+        content=content,
+        structured_projection={
+            "snapshot_id": snapshot.id,
+            "version": snapshot.version,
+            "reason": snapshot.reason,
+        },
+        retention="AUDIT",
+    )
+
+
+def _specialist_contribution_item(
+    *,
+    scope: TenantScope,
+    contribution: SpecialistContributionModel,
+    budget: ContextBudget,
+) -> ContextItem:
+    assert_no_secrets(contribution.payload)
+    content = _truncate(
+        json.dumps(contribution.payload, sort_keys=True, ensure_ascii=True),
+        budget.max_content_chars,
+    )
+    return ContextItem(
+        organization_id=scope.organization_id,
+        business_id=scope.business_id,
+        source_object_type="specialist_contribution",
+        source_object_id=contribution.id,
+        provenance_ref=f"specialist_contribution:{contribution.id}",
+        epistemic_status=EpistemicStatus.OBSERVATION,
+        trust_class=SourceTrust.INTERNAL_SYSTEM,
+        data_boundary="TRUSTED_INTERNAL_DATA",
+        occurred_at=contribution.created_at,
+        recorded_at=contribution.created_at,
+        content=content,
+        structured_projection={
+            "role": contribution.role,
+            "contract_key": contribution.contract_key,
+            "schema_version": contribution.schema_version,
+        },
+        retention="AUDIT",
+    )
+
+
+def _decision_candidate_item(
+    *,
+    scope: TenantScope,
+    candidate: DecisionCandidateModel,
+    budget: ContextBudget,
+) -> ContextItem:
+    assert_no_secrets(candidate.payload)
+    content = _truncate(
+        json.dumps(candidate.payload, sort_keys=True, ensure_ascii=True),
+        budget.max_content_chars,
+    )
+    return ContextItem(
+        organization_id=scope.organization_id,
+        business_id=scope.business_id,
+        source_object_type="decision_candidate",
+        source_object_id=candidate.id,
+        provenance_ref=f"decision_candidate:{candidate.id}",
+        epistemic_status=EpistemicStatus.HYPOTHESIS,
+        trust_class=SourceTrust.INTERNAL_SYSTEM,
+        data_boundary="TRUSTED_INTERNAL_DATA",
+        occurred_at=candidate.created_at,
+        recorded_at=candidate.created_at,
+        content=content,
+        structured_projection={
+            "version_number": candidate.version_number,
+            "selected_action": candidate.selected_action,
+            "status": candidate.status,
+        },
+        retention="AUDIT",
+    )
+
+
+def _controller_review_item(
+    *,
+    scope: TenantScope,
+    review: ControllerReviewModel,
+    budget: ContextBudget,
+) -> ContextItem:
+    payload: dict[str, object] = {
+        "controller_type": review.controller_type or review.controller_name,
+        "verdict": review.verdict,
+        "issues": review.issues,
+        "required_changes": review.required_changes,
+        "conditions": review.conditions,
+    }
+    assert_no_secrets(payload)
+    content = _truncate(
+        json.dumps(payload, sort_keys=True, ensure_ascii=True),
+        budget.max_content_chars,
+    )
+    return ContextItem(
+        organization_id=scope.organization_id,
+        business_id=scope.business_id,
+        source_object_type="controller_review",
+        source_object_id=review.id,
+        provenance_ref=f"controller_review:{review.id}",
+        epistemic_status=EpistemicStatus.OBSERVATION,
+        trust_class=SourceTrust.INTERNAL_SYSTEM,
+        data_boundary="TRUSTED_INTERNAL_DATA",
+        occurred_at=review.created_at,
+        recorded_at=review.updated_at,
+        content=content,
+        structured_projection=payload,
+        retention="AUDIT",
     )
 
 

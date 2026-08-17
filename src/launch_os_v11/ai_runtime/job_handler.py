@@ -94,6 +94,8 @@ class AgentRunJobHandler:
         resolved_route = self._model_router.resolve(contract.model_capability)
         model_request: ModelRequest[BaseModel] = ModelRequest(
             capability=contract.model_capability,
+            selected_provider_name=resolved_route.route.provider_name,
+            selected_model_name=resolved_route.route.model_name,
             system_instructions=contract.system_instructions,
             instruction_version=contract.instruction_version,
             structured_context=context_bundle.structured_context,
@@ -105,7 +107,20 @@ class AgentRunJobHandler:
             safe_generation_policy="strict_structured_output_no_tools_no_truth_promotion",
         )
         result = resolved_route.adapter.invoke(model_request)
-        _persist_model_result(run=run, result=result, clock=clock)
+        _assert_route_trace(
+            requested_capability=contract.model_capability.value,
+            selected_provider=resolved_route.route.provider_name,
+            selected_model=resolved_route.route.model_name,
+            result=result,
+        )
+        _persist_model_result(
+            run=run,
+            result=result,
+            clock=clock,
+            requested_capability=contract.model_capability.value,
+            selected_provider=resolved_route.route.provider_name,
+            selected_model=resolved_route.route.model_name,
+        )
         session.flush()
 
     def record_attempt_failure(
@@ -191,6 +206,9 @@ def _persist_model_result(
     run: AgentRunModel,
     result: ModelResult[BaseModel],
     clock: Clock,
+    requested_capability: str,
+    selected_provider: str,
+    selected_model: str,
 ) -> None:
     _persist_provider_trace(run=run, metadata=result.metadata)
     if result.kind == ModelResultKind.PARSED:
@@ -205,6 +223,9 @@ def _persist_model_result(
         run.safe_trace_metadata = _safe_trace(
             outcome=AgentRunStatus.SUCCEEDED.value,
             metadata=result.metadata,
+            requested_capability=requested_capability,
+            selected_provider=selected_provider,
+            selected_model=selected_model,
         )
         return
     if result.kind == ModelResultKind.REFUSAL:
@@ -215,6 +236,9 @@ def _persist_model_result(
         run.safe_trace_metadata = _safe_trace(
             outcome=AgentRunStatus.REFUSED.value,
             metadata=result.metadata,
+            requested_capability=requested_capability,
+            selected_provider=selected_provider,
+            selected_model=selected_model,
         )
         return
     if result.kind in {ModelResultKind.INCOMPLETE, ModelResultKind.INVALID_OUTPUT}:
@@ -227,9 +251,28 @@ def _persist_model_result(
         run.safe_trace_metadata = _safe_trace(
             outcome=AgentRunStatus.INVALID_OUTPUT.value,
             metadata=result.metadata,
+            requested_capability=requested_capability,
+            selected_provider=selected_provider,
+            selected_model=selected_model,
         )
         return
     raise AIInvalidOutputError(f"unsupported model result kind: {result.kind}")
+
+
+def _assert_route_trace(
+    *,
+    requested_capability: str,
+    selected_provider: str,
+    selected_model: str,
+    result: ModelResult[BaseModel],
+) -> None:
+    metadata = result.metadata
+    if metadata.provider_name != selected_provider or metadata.model_name != selected_model:
+        raise AIContractError(
+            "model route trace mismatch: "
+            f"requested={requested_capability} selected={selected_provider}/{selected_model} "
+            f"invoked={metadata.provider_name}/{metadata.model_name}"
+        )
 
 
 def _persist_provider_trace(*, run: AgentRunModel, metadata: ProviderMetadata) -> None:
@@ -240,11 +283,23 @@ def _persist_provider_trace(*, run: AgentRunModel, metadata: ProviderMetadata) -
     run.latency_ms = metadata.latency_ms
 
 
-def _safe_trace(*, outcome: str, metadata: ProviderMetadata) -> dict[str, object]:
+def _safe_trace(
+    *,
+    outcome: str,
+    metadata: ProviderMetadata,
+    requested_capability: str,
+    selected_provider: str,
+    selected_model: str,
+) -> dict[str, object]:
     trace = metadata.safe_dict()
     trace["schema_name"] = "AgentRunProviderTrace"
     trace["schema_version"] = 1
     trace["outcome"] = outcome
+    trace["requested_capability"] = requested_capability
+    trace["selected_provider_name"] = selected_provider
+    trace["selected_model_name"] = selected_model
+    trace["actual_provider_name"] = metadata.provider_name
+    trace["actual_model_name"] = metadata.model_name
     assert_no_secrets(trace)
     return trace
 
