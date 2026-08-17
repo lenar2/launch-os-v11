@@ -133,11 +133,16 @@ def governed_controller_outcome(
     }
 
     constitutional = by_type.get("constitutional")
-    if _contains_human_worth_violation(candidate.payload):
-        if constitutional is None or constitutional.verdict != ControllerVerdict.BLOCK.value:
-            raise PermanentJobError(
-                "Constitutional Controller must BLOCK deterministic human-worth violations"
-            )
+    if (
+        _contains_human_worth_violation(candidate.payload)
+        and (
+            constitutional is None
+            or constitutional.verdict != ControllerVerdict.BLOCK.value
+        )
+    ):
+        raise PermanentJobError(
+            "Constitutional Controller must BLOCK deterministic human-worth violations"
+        )
 
     ignored_review_ids: set[str] = set()
     anti_paralysis = by_type.get("anti_analysis_paralysis")
@@ -275,18 +280,41 @@ _WORTH_TERMS = (
     "something wrong with you",
     "failure as a person",
 )
+_NEGATION_TERMS = ("not", "never", "no", "doesn't", "does not", "do not", "cannot")
 
 
 def _contains_human_worth_violation(payload: dict[str, object]) -> bool:
-    for value in _strings(payload):
-        text = re.sub(r"\s+", " ", value.lower()).strip()
-        if not any(term in text for term in _BUSINESS_TERMS):
-            continue
-        if not any(term in text for term in _WORTH_TERMS):
-            continue
-        if any(term in text for term in _MAPPING_TERMS):
-            return True
+    return any(_has_directional_worth_mapping(value) for value in _strings(payload))
+
+
+def _has_directional_worth_mapping(value: str) -> bool:
+    text = re.sub(r"\s+", " ", value.lower()).strip()
+    business_positions = _term_positions(text, _BUSINESS_TERMS)
+    mapping_positions = _term_positions(text, _MAPPING_TERMS)
+    worth_positions = _term_positions(text, _WORTH_TERMS)
+    for business_start in business_positions:
+        for mapping_start in mapping_positions:
+            if mapping_start <= business_start:
+                continue
+            prefix = text[max(business_start, mapping_start - 18) : mapping_start]
+            if any(term in prefix.split() for term in ("not", "never", "no")):
+                continue
+            if any(term in prefix for term in _NEGATION_TERMS[3:]):
+                continue
+            for worth_start in worth_positions:
+                if business_start < mapping_start < worth_start and worth_start - business_start <= 180:
+                    return True
     return False
+
+
+def _term_positions(text: str, terms: tuple[str, ...]) -> tuple[int, ...]:
+    positions: list[int] = []
+    for term in terms:
+        start = text.find(term)
+        while start >= 0:
+            positions.append(start)
+            start = text.find(term, start + 1)
+    return tuple(sorted(positions))
 
 
 def _strings(value: object) -> list[str]:
