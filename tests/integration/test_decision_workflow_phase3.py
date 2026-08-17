@@ -114,7 +114,7 @@ def test_phase3_governed_decision_workflow_postgresql_redis_gate(
             workflow_id=workflow_id,
             status=DecisionWorkflowStatus.AWAITING_DECISION_APPROVAL,
         )
-        assert adapter.call_count == 18
+        assert adapter.call_count == 19
 
         _assert_revision_loop_and_materialization(factory, workflow_id=workflow_id)
         _assert_route_trace_and_propagation(factory, workflow_id=workflow_id)
@@ -379,7 +379,7 @@ def _assert_route_trace_and_propagation(
         workflow = session.get(models.DecisionWorkflowModel, workflow_id)
         assert workflow is not None
         runs = session.scalars(select(models.AgentRunModel)).all()
-        assert len(runs) == 18
+        assert len(runs) == 19
         assert {run.status for run in runs} == {AgentRunStatus.SUCCEEDED.value}
         assert {run.correlation_id for run in runs} == {"corr-phase3-workflow"}
         for run in runs:
