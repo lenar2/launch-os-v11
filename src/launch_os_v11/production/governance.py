@@ -92,9 +92,7 @@ def _has_unsupported_claims(
                 return True
     lowered = asset_version.body.lower()
     risky_markers = ("guaranteed", "guarantee", "100%", "testimonial", "everyone gets")
-    if any(marker in lowered for marker in risky_markers) and not declared_refs:
-        return True
-    return False
+    return any(marker in lowered for marker in risky_markers) and not declared_refs
 
 
 def _rights_are_complete(

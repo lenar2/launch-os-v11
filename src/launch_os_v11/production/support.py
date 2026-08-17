@@ -32,7 +32,6 @@ from launch_os_v11.runtime.errors import PermanentJobError, TransientJobError
 from launch_os_v11.runtime.repositories import create_job
 from launch_os_v11.runtime.transport import JobQueue
 
-
 OutputModelT = TypeVar("OutputModelT", bound=BaseModel)
 
 

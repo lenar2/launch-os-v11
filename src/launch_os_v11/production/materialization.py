@@ -37,7 +37,6 @@ from launch_os_v11.production.support import (
 from launch_os_v11.runtime.errors import PermanentJobError
 from launch_os_v11.runtime.security import assert_no_secrets
 
-
 ASSET_TYPE_TELEGRAM_POST_COPY = "TELEGRAM_POST_COPY"
 
 
