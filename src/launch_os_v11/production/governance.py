@@ -34,7 +34,7 @@ def governed_asset_outcome(
             f"required asset controllers not ready: {', '.join(sorted(missing))}"
         )
 
-    body_payload = {"body": asset_version.body}
+    body_payload: dict[str, object] = {"body": asset_version.body}
     if _contains_human_worth_violation(body_payload):
         return ControllerVerdict.BLOCK
     if _contains_hard_manipulation(asset_version.body):

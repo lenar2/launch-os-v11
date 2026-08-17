@@ -3,16 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import (
-    JSON,
-    CheckConstraint,
-    DateTime,
-    ForeignKey,
-    Integer,
-    String,
-    Text,
-    UniqueConstraint,
-)
+from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from launch_os_v11.domain.ids import new_id
@@ -20,7 +11,7 @@ from launch_os_v11.domain.time import utc_now
 from launch_os_v11.persistence.models import AssetVersionModel, Base
 
 # Phase 4 permits honest AGENT creator identity; the legacy user-only column becomes optional.
-AssetVersionModel.__table__.c.created_by_user_id.nullable = True
+AssetVersionModel.__table__.c.created_by_user_id.nullable = True  # type: ignore[attr-defined]
 
 
 class ProductionWorkflowModel(Base):
