@@ -302,7 +302,9 @@ def _has_directional_worth_mapping(value: str) -> bool:
             if any(term in prefix for term in _NEGATION_TERMS[3:]):
                 continue
             for worth_start in worth_positions:
-                if business_start < mapping_start < worth_start and worth_start - business_start <= 180:
+                directional_mapping = business_start < mapping_start < worth_start
+                nearby_mapping = worth_start - business_start <= 180
+                if directional_mapping and nearby_mapping:
                     return True
     return False
 
