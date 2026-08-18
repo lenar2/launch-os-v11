@@ -9,6 +9,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.schema import SchemaItem
 
 revision: str = "0005_phase4_production_workflow"
 down_revision: str | None = "0004_phase3_decision_workflow"
@@ -213,7 +214,7 @@ def _asset_reviews() -> None:
 def _create(
     table: str,
     columns: list[sa.Column],
-    constraints: list[sa.SchemaItem],
+    constraints: list[SchemaItem],
     indexes: str,
 ) -> None:
     op.create_table(table, *columns, *constraints)
