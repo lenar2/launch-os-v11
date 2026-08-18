@@ -70,7 +70,9 @@ def _seed_business_context(
         created_at=now,
         updated_at=now,
     )
-    session.add_all([organization, business, user])
+    session.add_all([organization, user])
+    session.flush()
+    session.add(business)
     session.flush()
     scope = TenantScope(organization_id=organization.id, business_id=business.id)
     source = models.SourceRecordModel(
@@ -117,7 +119,11 @@ def _seed_business_context(
         },
         created_at=now,
     )
-    session.add_all([source, evidence, snapshot])
+    session.add(source)
+    session.flush()
+    session.add(evidence)
+    session.flush()
+    session.add(snapshot)
     session.flush()
     return scope, user, evidence, snapshot
 
@@ -196,7 +202,9 @@ def _seed_approved_phase3_chain(
         updated_at=now,
         version=1,
     )
-    session.add_all([definition, chief_run])
+    session.add(definition)
+    session.flush()
+    session.add(chief_run)
     session.flush()
     workflow = models.DecisionWorkflowModel(
         id="phase4-decision-workflow",
