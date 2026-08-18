@@ -39,6 +39,10 @@ class Settings(BaseSettings):
         alias="LAUNCH_OS_AI_OPENAI_TEXT_MODEL",
     )
     openai_api_key: SecretStr | None = Field(default=None, alias="OPENAI_API_KEY")
+    telegram_bot_token: SecretStr | None = Field(
+        default=None,
+        alias="TELEGRAM_BOT_TOKEN",
+    )
 
 
 @lru_cache

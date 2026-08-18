@@ -1,1 +1,1 @@
-"""Execution boundary reserved for deterministic write execution services."""
+"""Governed external execution boundary for Launch OS v11."""

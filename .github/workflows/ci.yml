@@ -64,3 +64,5 @@ jobs:
         run: python -m pytest -m decision_workflow tests/integration
       - name: Production Workflow PostgreSQL Redis
         run: python -m pytest -m production_workflow tests/integration
+      - name: Telegram Execution PostgreSQL Redis
+        run: python -m pytest -m telegram_execution tests/integration

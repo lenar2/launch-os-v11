@@ -8,10 +8,16 @@ from launch_os_v11.ai_runtime.router import ModelRouter
 from launch_os_v11.application.decision_governance import GuardedDecisionWorkflowAdvanceHandler
 from launch_os_v11.application.production_workflow import ProductionWorkflowAdvanceHandler
 from launch_os_v11.application.workflow_dispatcher import WorkflowAdvanceDispatcher
+from launch_os_v11.execution.contracts import TelegramConnector
+from launch_os_v11.execution.service import TelegramExecutionHandler
+from launch_os_v11.execution.telegram import SettingsSecretResolver, TelegramHttpConnector
 from launch_os_v11.platform.config import Settings
 from launch_os_v11.production.context import ProductionContextBuilder
 from launch_os_v11.production.registry import phase4_agent_registry
-from launch_os_v11.runtime.contracts import JOB_TYPE_WORKFLOW_ADVANCE
+from launch_os_v11.runtime.contracts import (
+    JOB_TYPE_EXECUTION_TELEGRAM_PUBLISH,
+    JOB_TYPE_WORKFLOW_ADVANCE,
+)
 from launch_os_v11.runtime.handlers import JobHandler
 from launch_os_v11.runtime.transport import JobQueue
 
@@ -23,6 +29,7 @@ def compose_application_handler_registry(
     registry: AgentRegistry | None = None,
     model_router: ModelRouter | None = None,
     context_builder: ContextBuilder | None = None,
+    telegram_connector: TelegramConnector | None = None,
 ) -> dict[str, JobHandler]:
     actual_registry = registry or phase4_agent_registry()
     actual_context_builder = context_builder or ProductionContextBuilder()
@@ -31,6 +38,12 @@ def compose_application_handler_registry(
         registry=actual_registry,
         model_router=model_router,
         context_builder=actual_context_builder,
+    )
+    actual_telegram_connector = telegram_connector or TelegramHttpConnector(
+        secret_resolver=SettingsSecretResolver(settings)
+    )
+    handlers[JOB_TYPE_EXECUTION_TELEGRAM_PUBLISH] = TelegramExecutionHandler(
+        connector=actual_telegram_connector
     )
     if not settings.launch_workflow_enabled and model_router is None:
         return handlers

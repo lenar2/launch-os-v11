@@ -24,8 +24,9 @@ Current implementation posture:
 - Phase 2A durable async runtime: implemented.
 - Phase 2B governed AI runtime foundation: implemented behind explicit runtime contracts and deterministic fake-adapter CI coverage.
 - Phase 3 governed business decision workflow: implemented and accepted.
-- Phase 4 governed production workflow: implemented for one Telegram-ready text asset, with version-bound truth/brand/constitutional/manipulation/legal/quality/rights review and no external write.
-- Phase 5 ActionProposal, permissioned Telegram execution, and connector observation: not yet.
+- Phase 4 governed production workflow: implemented and accepted for one Telegram-ready text asset, with version-bound truth/brand/constitutional/manipulation/legal/quality/rights review and no external write.
+- Phase 5 governed Telegram execution: implemented with immutable ActionProposal binding, deterministic execution controllers, owner approval, global write controls, typed Telegram connector, idempotent success reuse, and external reference/publication audit. Final closure requires one live approved publication to a dedicated Telegram test channel.
+- Phase 6 connector observation, metrics, learning, and next-decision adaptation: not yet.
 
 First build target:
 
@@ -62,6 +63,10 @@ Run Phase 3 governed decision workflow integration:
 Run Phase 4 governed production workflow integration:
 
 `make test-production-workflow`
+
+Run Phase 5 governed Telegram execution integration with the deterministic fake connector:
+
+`make test-telegram-execution`
 
 Run migrations locally against the configured `LAUNCH_OS_DATABASE_URL`:
 
