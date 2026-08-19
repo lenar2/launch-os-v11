@@ -12,7 +12,8 @@ from launch_os_v11.persistence.execution_models import (
     ActionProposalDetailModel,
     ConnectorAccountModel,
 )
-from launch_os_v11.persistence.models import ActionModel, AssetVersionModel
+from launch_os_v11.persistence.models import ActionModel, AssetVersionModel, ExperimentModel
+from launch_os_v11.persistence.phase6_models import CheckpointDefinitionModel
 from launch_os_v11.persistence.production_models import (
     AssetRightsProvenanceModel,
     ProductionWorkflowModel,
@@ -120,7 +121,7 @@ def _platform_review(
         return DeterministicExecutionReview(
             controller_type=ExecutionControllerType.PLATFORM,
             verdict=ControllerVerdict.BLOCK,
-            reason="Only Telegram text publication is supported in Phase 5.",
+            reason="Only Telegram text publication is supported in Phase 5/6.",
         )
     if not isinstance(text, str) or not text or len(text) > 4096:
         return DeterministicExecutionReview(
@@ -189,6 +190,27 @@ def _execution_review(
             verdict=ControllerVerdict.BLOCK,
             reason="Action exact-version binding is invalid.",
         )
+    experiment = session.scalar(
+        select(ExperimentModel).where(ExperimentModel.decision_id == detail.decision_id)
+    )
+    if experiment is not None:
+        checkpoint = session.scalar(
+            select(CheckpointDefinitionModel).where(
+                CheckpointDefinitionModel.experiment_id == experiment.id
+            )
+        )
+        if checkpoint is None:
+            return DeterministicExecutionReview(
+                controller_type=ExecutionControllerType.EXECUTION,
+                verdict=ControllerVerdict.BLOCK,
+                reason="Governed Experiment is missing its pre-execution typed checkpoint.",
+            )
+        if checkpoint.decision_id != detail.decision_id or checkpoint.metric_key != experiment.metric:
+            return DeterministicExecutionReview(
+                controller_type=ExecutionControllerType.EXECUTION,
+                verdict=ControllerVerdict.BLOCK,
+                reason="Governed Experiment checkpoint binding is inconsistent.",
+            )
     return DeterministicExecutionReview(
         controller_type=ExecutionControllerType.EXECUTION,
         verdict=ControllerVerdict.PASS,
@@ -200,5 +222,5 @@ def _cost_review() -> DeterministicExecutionReview:
     return DeterministicExecutionReview(
         controller_type=ExecutionControllerType.COST,
         verdict=ControllerVerdict.PASS,
-        reason="This Phase 5 action contract creates no discretionary spend.",
+        reason="This Phase 5/6 action contract creates no discretionary spend.",
     )
