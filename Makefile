@@ -1,4 +1,4 @@
-.PHONY: install check test test-migrations test-postgres test-runtime test-ai-runtime test-decision-workflow test-production-workflow test-telegram-execution migrate downgrade run-api
+.PHONY: install check test test-migrations test-postgres test-runtime test-ai-runtime test-decision-workflow test-production-workflow test-telegram-execution test-phase6-learning migrate downgrade run-api
 
 PYTHON ?= python3
 
@@ -32,6 +32,9 @@ test-production-workflow:
 
 test-telegram-execution:
 	PYTHON=$(PYTHON) ./scripts/run_telegram_execution_integration.sh
+
+test-phase6-learning:
+	PYTHON=$(PYTHON) ./scripts/run_phase6_learning_integration.sh
 
 migrate:
 	$(PYTHON) -m alembic upgrade head
