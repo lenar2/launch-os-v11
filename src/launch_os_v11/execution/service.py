@@ -20,9 +20,9 @@ from launch_os_v11.domain.enums import (
 from launch_os_v11.domain.ids import new_id
 from launch_os_v11.domain.scope import TenantScope
 from launch_os_v11.execution.contracts import (
-    PermissionOutcome,
     TELEGRAM_PUBLISH_ACTION,
     TELEGRAM_SECRET_REF,
+    PermissionOutcome,
     TelegramAmbiguousOutcome,
     TelegramConnector,
     TelegramConnectorRejected,

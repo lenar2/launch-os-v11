@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
-
 TELEGRAM_PUBLISH_ACTION = "telegram.publish_text"
 TELEGRAM_SECRET_REF = "telegram.bot_token"
 

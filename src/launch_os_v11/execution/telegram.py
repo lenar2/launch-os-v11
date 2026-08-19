@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import socket
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -9,8 +8,8 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from launch_os_v11.execution.contracts import (
-    ConnectorReadiness,
     TELEGRAM_SECRET_REF,
+    ConnectorReadiness,
     TelegramAmbiguousOutcome,
     TelegramConnectorRejected,
     TelegramPublishResult,
@@ -116,7 +115,7 @@ class TelegramHttpConnector:
             return self._request(method, payload)
         except HTTPError as error:
             raise TelegramConnectorRejected(f"TELEGRAM_HTTP_{error.code}") from None
-        except (URLError, TimeoutError, socket.timeout, OSError):
+        except (URLError, TimeoutError, OSError):
             raise TelegramConnectorRejected("TELEGRAM_READ_UNAVAILABLE") from None
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError):
             raise TelegramConnectorRejected("TELEGRAM_INVALID_RESPONSE") from None
@@ -126,7 +125,7 @@ class TelegramHttpConnector:
             return self._request(method, payload)
         except HTTPError as error:
             raise TelegramConnectorRejected(f"TELEGRAM_HTTP_{error.code}") from None
-        except (URLError, TimeoutError, socket.timeout, OSError):
+        except (URLError, TimeoutError, OSError):
             raise TelegramAmbiguousOutcome("TELEGRAM_TRANSPORT_AMBIGUOUS") from None
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError):
             raise TelegramAmbiguousOutcome("TELEGRAM_RESPONSE_AMBIGUOUS") from None
