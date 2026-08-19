@@ -4,13 +4,10 @@ from collections.abc import Mapping
 
 from sqlalchemy.orm import Session
 
-from launch_os_v11.application.decision_governance import (
-    GuardedDecisionWorkflowAdvanceHandler,
-)
-from launch_os_v11.application.production_workflow import ProductionWorkflowAdvanceHandler
 from launch_os_v11.runtime.clock import Clock
 from launch_os_v11.runtime.contracts import RuntimeJobContext
 from launch_os_v11.runtime.errors import PermanentJobError
+from launch_os_v11.runtime.handlers import JobHandler
 
 
 class WorkflowAdvanceDispatcher:
@@ -19,8 +16,8 @@ class WorkflowAdvanceDispatcher:
     def __init__(
         self,
         *,
-        decision_handler: GuardedDecisionWorkflowAdvanceHandler,
-        production_handler: ProductionWorkflowAdvanceHandler,
+        decision_handler: JobHandler,
+        production_handler: JobHandler,
     ) -> None:
         self._decision_handler = decision_handler
         self._production_handler = production_handler
