@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 from launch_os_v11.ai_runtime.composition import compose_handler_registry as compose_ai_handlers
 from launch_os_v11.ai_runtime.context import ContextBuilder
 from launch_os_v11.ai_runtime.errors import AIConfigurationError
@@ -55,12 +57,12 @@ def compose_application_handler_registry(
         telegram_observation_connector
         or TelegramHttpObservationConnector(settings=settings)
     )
-    handlers.update(
-        phase6_handler_registry(
-            queue=queue,
-            telegram_observation_connector=actual_observation_connector,
-        )
+    phase6_handlers = phase6_handler_registry(
+        queue=queue,
+        telegram_observation_connector=actual_observation_connector,
     )
+    for job_type, handler in phase6_handlers.items():
+        handlers[job_type] = cast(JobHandler, handler)
     if not settings.launch_workflow_enabled and model_router is None:
         return handlers
     if not settings.ai_team_enabled and model_router is None:
