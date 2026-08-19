@@ -37,6 +37,7 @@ from launch_os_v11.domain.enums import (
     CausalityClass,
     EpistemicStatus,
     ExecutionStatus,
+    ExperimentStatus,
     SourceTrust,
 )
 from launch_os_v11.domain.scope import TenantScope
@@ -701,6 +702,22 @@ def _publish_and_start_observation(
         publication = session.get(models.PublicationModel, link.publication_id)
         assert publication is not None
         assert publication.published_at == clock.now()
+
+        production_workflow = session.get(
+            ProductionWorkflowModel,
+            production_workflow_id,
+        )
+        assert production_workflow is not None
+
+        experiment = session.scalar(
+            select(models.ExperimentModel).where(
+                models.ExperimentModel.decision_id
+                == production_workflow.decision_id
+            )
+        )
+        assert experiment is not None
+        assert experiment.status == ExperimentStatus.RUNNING.value
+
         return publication.id, connector_account_id
     finally:
         session.close()

@@ -13,6 +13,7 @@ from launch_os_v11.domain.enums import (
     ActionStatus,
     ApprovalStatus,
     ExecutionStatus,
+    ExperimentStatus,
     OutboxStatus,
     PermissionMode,
     PublicationStatus,
@@ -50,6 +51,7 @@ from launch_os_v11.persistence.models import (
     BusinessMembershipModel,
     ChannelModel,
     ExecutionModel,
+    ExperimentModel,
     OutboxEventModel,
     PermissionPolicyModel,
     PublicationModel,
@@ -675,6 +677,28 @@ class TelegramExecutionHandler:
                 created_at=clock.now(),
             )
         )
+        experiment = session.scalar(
+            select(ExperimentModel).where(
+                ExperimentModel.decision_id == detail.decision_id
+            )
+        )
+        if experiment is not None:
+            experiment.status = ExperimentStatus.RUNNING.value
+            _audit(
+                session,
+                scope=context.scope,
+                action="EXPERIMENT_STARTED",
+                object_type="Experiment",
+                object_id=experiment.id,
+                payload={
+                    "publication_id": publication.id,
+                    "action_id": action.id,
+                },
+                actor_user_id=None,
+                correlation_id=detail.correlation_id or action.id,
+                causation_id=execution.id,
+            )
+
         execution.status = ExecutionStatus.SUCCEEDED.value
         execution.external_reference = result.message_id
         action.status = ActionStatus.EXECUTED.value
@@ -792,6 +816,16 @@ def _preflight_block_reason(
         return "connector_not_ready"
     if account.target_chat_id != detail.target_chat_id:
         return "connector_target_changed"
+    experiment = session.scalar(
+        select(ExperimentModel).where(
+            ExperimentModel.decision_id == detail.decision_id
+        )
+    )
+    if (
+        experiment is not None
+        and experiment.status != ExperimentStatus.DRAFT.value
+    ):
+        return "experiment_not_draft"
     if _payload_hash(detail.delivery_payload) != detail.delivery_payload_hash:
         return "action_payload_hash_mismatch"
     return None

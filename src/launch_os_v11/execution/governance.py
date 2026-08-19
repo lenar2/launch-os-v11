@@ -6,7 +6,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from launch_os_v11.domain.enums import ControllerVerdict
+from launch_os_v11.domain.enums import ControllerVerdict, ExperimentStatus
 from launch_os_v11.execution.contracts import ExecutionControllerType
 from launch_os_v11.persistence.execution_models import (
     ActionProposalDetailModel,
@@ -194,6 +194,15 @@ def _execution_review(
         select(ExperimentModel).where(ExperimentModel.decision_id == detail.decision_id)
     )
     if experiment is not None:
+        if experiment.status != ExperimentStatus.DRAFT.value:
+            return DeterministicExecutionReview(
+                controller_type=ExecutionControllerType.EXECUTION,
+                verdict=ControllerVerdict.BLOCK,
+                reason=(
+                    "Governed Experiment must be DRAFT "
+                    "before first external execution."
+                ),
+            )
         checkpoint = session.scalar(
             select(CheckpointDefinitionModel).where(
                 CheckpointDefinitionModel.experiment_id == experiment.id
