@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
 
 from sqlalchemy import select
@@ -61,13 +63,18 @@ def create_checkpoint_definition_for_decision(
         raise PermanentJobError("Phase 6 governed Experiment requires an ExperimentRule")
     if experiment.metric != spec.metric_key or rule.metric != spec.metric_key:
         raise PermanentJobError("typed checkpoint metric must match the Experiment metric")
+    bound_hash = _bound_checkpoint_hash(
+        spec=spec,
+        experiment_id=experiment.id,
+        experiment_rule_id=rule.id,
+    )
     existing = session.scalar(
         select(CheckpointDefinitionModel).where(
             CheckpointDefinitionModel.experiment_id == experiment.id
         )
     )
     if existing is not None:
-        if existing.contract_hash != spec.contract_hash():
+        if existing.contract_hash != bound_hash:
             raise PermanentJobError("immutable checkpoint definition already exists")
         return existing
     executed_intent = session.scalar(
@@ -100,7 +107,7 @@ def create_checkpoint_definition_for_decision(
         next_action_on_success=spec.next_action_on_success,
         next_action_on_weak_signal=spec.next_action_on_weak_signal,
         next_action_on_failure=spec.next_action_on_failure,
-        contract_hash=spec.contract_hash(),
+        contract_hash=bound_hash,
         created_at=clock.now(),
     )
     session.add(checkpoint)
@@ -236,7 +243,7 @@ class Phase6DecisionWorkflowAdvanceHandler:
         session: Session,
         clock: Clock,
     ) -> None:
-        workflow_id = payload.get("decision_workflow_id")
+        workflow_id = payload.get("workflow_id")
         self._delegate.handle(
             context=context,
             payload=payload,
@@ -352,6 +359,26 @@ def _materialize_phase6_intent(
             )
         )
     session.flush()
+
+
+def _bound_checkpoint_hash(
+    *,
+    spec: Phase6CheckpointSpec,
+    experiment_id: str,
+    experiment_rule_id: str,
+) -> str:
+    payload = {
+        "spec": spec.canonical_payload(),
+        "experiment_id": experiment_id,
+        "experiment_rule_id": experiment_rule_id,
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _assert_owner(session: Session, *, scope: TenantScope, user_id: str) -> None:
