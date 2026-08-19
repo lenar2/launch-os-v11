@@ -29,6 +29,11 @@ def test_initial_migration_upgrade_and_downgrade_clean_database(
     assert "business_snapshots" in tables_after_upgrade
     assert "outbox_events" in tables_after_upgrade
     assert "approvals" in tables_after_upgrade
+    assert "checkpoint_definitions" in tables_after_upgrade
+    assert "connector_observations" in tables_after_upgrade
+    assert "metric_versions" in tables_after_upgrade
+    assert "learning_details" in tables_after_upgrade
+    assert "decision_learning_links" in tables_after_upgrade
 
     command.downgrade(config, "base")
 
@@ -41,3 +46,4 @@ def test_initial_migration_upgrade_and_downgrade_clean_database(
 
     assert "businesses" not in tables_after_downgrade
     assert "outbox_events" not in tables_after_downgrade
+    assert "metric_versions" not in tables_after_downgrade
