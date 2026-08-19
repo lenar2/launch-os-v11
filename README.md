@@ -20,13 +20,13 @@ Start here:
 Current implementation posture:
 
 - Architecture: ready.
-- Phase 0/1 domain and persistence foundation: implemented.
-- Phase 2A durable async runtime: implemented.
-- Phase 2B governed AI runtime foundation: implemented behind explicit runtime contracts and deterministic fake-adapter CI coverage.
+- Phase 0/1 domain and persistence foundation: implemented and accepted.
+- Phase 2A durable async runtime: implemented and accepted.
+- Phase 2B governed AI runtime foundation: implemented and accepted behind explicit runtime contracts and deterministic fake-adapter CI coverage.
 - Phase 3 governed business decision workflow: implemented and accepted.
 - Phase 4 governed production workflow: implemented and accepted for one Telegram-ready text asset, with version-bound truth/brand/constitutional/manipulation/legal/quality/rights review and no external write.
-- Phase 5 governed Telegram execution: implemented with immutable ActionProposal binding, deterministic execution controllers, owner approval, global write controls, typed Telegram connector, idempotent success reuse, and external reference/publication audit. Final closure requires one live approved publication to a dedicated Telegram test channel.
-- Phase 6 connector observation, metrics, learning, and next-decision adaptation: not yet.
+- Phase 5 governed Telegram execution: implemented and accepted, including one live owner-approved publication to a dedicated Telegram test channel, persisted external message ID, audit/outbox evidence, secret redaction, and duplicate-job protection.
+- Phase 6 governed observation, deterministic MetricVersion, checkpoint interpretation, bounded learning, and owner-gated successor Decision adaptation: implementation in progress under ADR 0010. Closure requires PostgreSQL/Redis acceptance and a fresh live Telegram observation trace; the Phase 5 publication is not retrofitted into a Phase 6 experiment.
 
 First build target:
 
@@ -67,6 +67,10 @@ Run Phase 4 governed production workflow integration:
 Run Phase 5 governed Telegram execution integration with the deterministic fake connector:
 
 `make test-telegram-execution`
+
+Run Phase 6 governed observation/learning integration:
+
+`make test-phase6-learning`
 
 Run migrations locally against the configured `LAUNCH_OS_DATABASE_URL`:
 
