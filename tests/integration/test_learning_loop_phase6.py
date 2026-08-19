@@ -408,8 +408,10 @@ def _seed_launch(factory: sessionmaker[Session], *, now: datetime) -> Seed:
                 source_occurred_at=now,
                 ingested_at=now,
             )
+            session.add(owner)
+            session.flush()
             session.add_all(
-                [owner, membership, goal, product, launch_channel, source]
+                [membership, goal, product, launch_channel, source]
             )
             session.flush()
             offer = models.OfferModel(

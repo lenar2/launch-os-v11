@@ -140,6 +140,7 @@ def start_phase6_decision_workflow(
         reason="phase6.governed_decision",
         payload=payload,
     ).record
+    session.flush()
     result = base.start_decision_workflow(
         session,
         context=context,
@@ -209,6 +210,7 @@ def start_successor_decision_workflow_from_learning(
         reason="phase6.learning_adaptation",
         payload=payload,
     ).record
+    session.flush()
     result = base.start_decision_workflow(
         session,
         context=context,
