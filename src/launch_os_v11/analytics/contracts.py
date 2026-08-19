@@ -2,9 +2,25 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Literal
+from collections.abc import Sequence
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class TelegramObservationUnavailable(RuntimeError):
+    pass
+
+
+class TelegramObservationConnector(Protocol):
+    def get_updates(
+        self,
+        *,
+        offset: int | None,
+        allowed_updates: Sequence[str],
+        timeout_seconds: int,
+    ) -> tuple[dict[str, Any], ...]:
+        """Return provider updates as untrusted data."""
 
 
 class _StrictPhase6Model(BaseModel):

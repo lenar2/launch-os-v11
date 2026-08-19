@@ -7,14 +7,11 @@ from launch_os_v11.ai_runtime.context import ContextBuilder
 from launch_os_v11.ai_runtime.errors import AIConfigurationError
 from launch_os_v11.ai_runtime.registry import AgentRegistry
 from launch_os_v11.ai_runtime.router import ModelRouter
+from launch_os_v11.analytics.contracts import TelegramObservationConnector
 from launch_os_v11.analytics.phase6 import phase6_handler_registry
 from launch_os_v11.application.phase6 import Phase6DecisionWorkflowAdvanceHandler
 from launch_os_v11.application.production_workflow import ProductionWorkflowAdvanceHandler
 from launch_os_v11.application.workflow_dispatcher import WorkflowAdvanceDispatcher
-from launch_os_v11.connectors.telegram_observation import (
-    TelegramHttpObservationConnector,
-    TelegramObservationConnector,
-)
 from launch_os_v11.execution.contracts import TelegramConnector
 from launch_os_v11.execution.service import TelegramExecutionHandler
 from launch_os_v11.execution.telegram import SettingsSecretResolver, TelegramHttpConnector
@@ -53,13 +50,9 @@ def compose_application_handler_registry(
     handlers[JOB_TYPE_EXECUTION_TELEGRAM_PUBLISH] = TelegramExecutionHandler(
         connector=actual_telegram_connector
     )
-    actual_observation_connector = (
-        telegram_observation_connector
-        or TelegramHttpObservationConnector(settings=settings)
-    )
     phase6_handlers = phase6_handler_registry(
         queue=queue,
-        telegram_observation_connector=actual_observation_connector,
+        telegram_observation_connector=telegram_observation_connector,
     )
     for job_type, handler in phase6_handlers.items():
         handlers[job_type] = cast(JobHandler, handler)

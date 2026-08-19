@@ -3,26 +3,12 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol, cast
+from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from launch_os_v11.analytics.contracts import TelegramObservationUnavailable
 from launch_os_v11.platform.config import Settings
-
-
-class TelegramObservationUnavailable(RuntimeError):
-    pass
-
-
-class TelegramObservationConnector(Protocol):
-    def get_updates(
-        self,
-        *,
-        offset: int | None,
-        allowed_updates: Sequence[str],
-        timeout_seconds: int,
-    ) -> tuple[dict[str, Any], ...]:
-        """Return provider updates as untrusted data."""
 
 
 class TelegramHttpObservationConnector:

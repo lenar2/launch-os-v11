@@ -18,6 +18,7 @@ from launch_os_v11.persistence.execution_models import ActionProposalDetailModel
 from launch_os_v11.persistence.models import (
     BusinessMembershipModel,
     DecisionModel,
+    DecisionWorkflowModel,
     ExperimentModel,
     ExperimentRuleModel,
     LearningModel,
@@ -312,7 +313,7 @@ def _materialize_phase6_intent(
     )
     if intent is None:
         return
-    workflow = session.get(base.DecisionWorkflowModel, workflow_id)
+    workflow = session.get(DecisionWorkflowModel, workflow_id)
     if workflow is None or workflow.final_decision_id is None:
         return
     scope.assert_matches(

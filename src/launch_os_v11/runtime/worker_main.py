@@ -4,6 +4,7 @@ import signal
 from threading import Event
 
 from launch_os_v11.application.composition import compose_application_handler_registry
+from launch_os_v11.connectors.telegram_observation import TelegramHttpObservationConnector
 from launch_os_v11.persistence.session import create_engine_from_settings, create_session_factory
 from launch_os_v11.platform.config import get_settings
 from launch_os_v11.runtime.transport import create_redis_job_queue
@@ -15,6 +16,9 @@ def main() -> None:
     engine = create_engine_from_settings(settings)
     factory = create_session_factory(engine)
     queue = create_redis_job_queue(settings.redis_url)
+    telegram_observation_connector = TelegramHttpObservationConnector(
+        settings=settings,
+    )
     stop_event = Event()
 
     def stop(signum: int, frame: object | None) -> None:
@@ -28,7 +32,11 @@ def main() -> None:
         session_factory=factory,
         queue=queue,
         worker_id="runtime-worker",
-        handlers=compose_application_handler_registry(settings=settings, queue=queue),
+        handlers=compose_application_handler_registry(
+            settings=settings,
+            queue=queue,
+            telegram_observation_connector=telegram_observation_connector,
+        ),
     )
     try:
         worker.run_forever(stop_event=stop_event)

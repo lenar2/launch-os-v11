@@ -205,7 +205,10 @@ def _execution_review(
                 verdict=ControllerVerdict.BLOCK,
                 reason="Governed Experiment is missing its pre-execution typed checkpoint.",
             )
-        if checkpoint.decision_id != detail.decision_id or checkpoint.metric_key != experiment.metric:
+        if (
+            checkpoint.decision_id != detail.decision_id
+            or checkpoint.metric_key != experiment.metric
+        ):
             return DeterministicExecutionReview(
                 controller_type=ExecutionControllerType.EXECUTION,
                 verdict=ControllerVerdict.BLOCK,

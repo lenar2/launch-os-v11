@@ -15,7 +15,6 @@ from launch_os_v11.ai_runtime.adapters.fake import FakeModelAdapter
 from launch_os_v11.ai_runtime.composition import fake_model_router
 from launch_os_v11.analytics.contracts import Phase6CheckpointSpec, TypedThreshold
 from launch_os_v11.analytics.phase6 import (
-    calculate_metric_version,
     configure_telegram_observation,
     enqueue_checkpoint_interpretation_job,
     enqueue_telegram_observation_job,
@@ -49,13 +48,11 @@ from launch_os_v11.execution.service import (
 from launch_os_v11.execution.telegram import FakeTelegramConnector
 from launch_os_v11.persistence import models
 from launch_os_v11.persistence.execution_models import (
-    ConnectorAccountModel,
     PublicationExecutionLinkModel,
 )
 from launch_os_v11.persistence.phase6_models import (
     CheckpointDefinitionModel,
     ConnectorObservationModel,
-    ConnectorObservationStateModel,
     DecisionLearningLinkModel,
     ExperimentResultDetailModel,
     LearningControllerReviewModel,

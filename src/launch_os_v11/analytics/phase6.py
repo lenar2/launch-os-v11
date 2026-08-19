@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from launch_os_v11.connectors.telegram_observation import (
+from launch_os_v11.analytics.contracts import (
     TelegramObservationConnector,
     TelegramObservationUnavailable,
 )
@@ -932,13 +932,9 @@ class GovernedLearningHandler:
 def phase6_handler_registry(
     *,
     queue: JobQueue,
-    telegram_observation_connector: TelegramObservationConnector,
+    telegram_observation_connector: TelegramObservationConnector | None,
 ) -> dict[str, object]:
-    return {
-        JOB_TYPE_CONNECTOR_TELEGRAM_OBSERVE_UPDATES: TelegramObservationHandler(
-            connector=telegram_observation_connector,
-            queue=queue,
-        ),
+    handlers: dict[str, object] = {
         JOB_TYPE_ANALYTICS_NORMALIZE_CONNECTOR_OBSERVATION: (
             NormalizeConnectorObservationHandler()
         ),
@@ -946,6 +942,14 @@ def phase6_handler_registry(
         JOB_TYPE_LEARNING_INTERPRET_CHECKPOINT: InterpretCheckpointHandler(queue=queue),
         JOB_TYPE_LEARNING_RUN_GOVERNED: GovernedLearningHandler(),
     }
+    if telegram_observation_connector is not None:
+        handlers[JOB_TYPE_CONNECTOR_TELEGRAM_OBSERVE_UPDATES] = (
+            TelegramObservationHandler(
+                connector=telegram_observation_connector,
+                queue=queue,
+            )
+        )
+    return handlers
 
 
 def _normalize_observation(

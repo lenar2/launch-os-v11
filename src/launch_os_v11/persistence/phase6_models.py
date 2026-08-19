@@ -157,7 +157,11 @@ class ConnectorObservationModel(Base):
     provider_event_type: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     external_object_id: Mapped[str | None] = mapped_column(String(255), index=True)
     external_parent_id: Mapped[str | None] = mapped_column(String(255), index=True)
-    event_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    event_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+    )
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     raw_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -240,7 +244,11 @@ class MetricVersionModel(Base):
     coverage_status: Mapped[str] = mapped_column(String(32), nullable=False)
     source_window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     source_window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    included_business_event_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    included_business_event_ids: Mapped[list[str]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+    )
     excluded_event_rule_version: Mapped[str] = mapped_column(String(128), nullable=False)
     calculation_version: Mapped[str] = mapped_column(String(128), nullable=False)
     calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

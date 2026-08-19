@@ -85,7 +85,15 @@ def upgrade() -> None:
     )
     _indexes(
         "checkpoint_definitions",
-        ["organization_id", "business_id", "decision_id", "experiment_id", "experiment_rule_id", "metric_key", "contract_hash"],
+        [
+            "organization_id",
+            "business_id",
+            "decision_id",
+            "experiment_id",
+            "experiment_rule_id",
+            "metric_key",
+            "contract_hash",
+        ],
     )
 
     op.create_table(
