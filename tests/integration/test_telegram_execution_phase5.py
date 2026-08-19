@@ -85,12 +85,31 @@ def _alembic_config(
     return Config("alembic.ini")
 
 
+def _clear_test_database(database_url: str) -> None:
+    engine = create_engine(database_url, future=True)
+    try:
+        tables = [
+            table
+            for table in inspect(engine).get_table_names()
+            if table != "alembic_version"
+        ]
+        if not tables:
+            return
+        preparer = engine.dialect.identifier_preparer
+        table_list = ", ".join(preparer.quote(table) for table in tables)
+        with engine.begin() as connection:
+            connection.exec_driver_sql(f"TRUNCATE TABLE {table_list} CASCADE")
+    finally:
+        engine.dispose()
+
+
 def test_phase5_governed_telegram_execution_postgresql_redis_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database_url = _database_url()
     redis_url = _redis_url()
     config = _alembic_config(database_url, monkeypatch)
+    _clear_test_database(database_url)
     command.downgrade(config, "base")
     command.upgrade(config, "head")
 
