@@ -870,6 +870,7 @@ def _assert_learning(
         assert learning is not None
         assert learning.decision_id == decision_id
         assert learning.causality_class == CausalityClass.DIRECT_DETERMINISTIC_ATTRIBUTION.value
+        assert learning.confidence is None
         assert learning_detail.metric_version_ids == [metric.id]
         assert len(learning_detail.limits) == 3
         reviews = session.scalars(

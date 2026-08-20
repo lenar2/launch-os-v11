@@ -849,7 +849,7 @@ def create_governed_learning(
         statement=_learning_statement(result.result_class, metric),
         evidence_ids=evidence_ids,
         causality_class=causality_class,
-        confidence=1.0,
+        confidence=None,
         version=1,
     )
     session.add(learning)
