@@ -303,6 +303,19 @@ def test_phase6_observe_measure_learn_adapt_postgresql_redis_gate(
         assert interpretation_job is not None
         assert interpretation_job.job_id == interpretation_job_id
         assert interpretation_job.status == "SUCCEEDED"
+
+        session = factory()
+        try:
+            experiment = session.scalar(
+                select(models.ExperimentModel).where(
+                    models.ExperimentModel.decision_id == decision_id
+                )
+            )
+            assert experiment is not None
+            assert experiment.status == ExperimentStatus.COMPLETE.value
+        finally:
+            session.close()
+
         learning_job = worker.process_one_from_queue(timeout_seconds=1)
         assert learning_job is not None
         assert learning_job.status == "SUCCEEDED"

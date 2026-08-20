@@ -18,6 +18,7 @@ from launch_os_v11.domain.enums import (
     CausalityClass,
     ControllerVerdict,
     EpistemicStatus,
+    ExperimentStatus,
     OutboxStatus,
     SourceTrust,
 )
@@ -654,6 +655,13 @@ def interpret_checkpoint(
     checkpoint = session.get(CheckpointDefinitionModel, metric.checkpoint_definition_id)
     if checkpoint is None:
         raise PermanentJobError("CheckpointDefinition not found")
+    experiment = session.get(ExperimentModel, checkpoint.experiment_id)
+    if experiment is None:
+        raise PermanentJobError("Experiment not found for checkpoint interpretation")
+    if experiment.status != ExperimentStatus.RUNNING.value:
+        raise PermanentJobError(
+            "Experiment must be RUNNING before checkpoint interpretation"
+        )
     if metric.availability_status != "AVAILABLE" or metric.coverage_status != "COMPLETE":
         result_class = "INSUFFICIENT_DATA"
     else:
@@ -704,6 +712,23 @@ def interpret_checkpoint(
     )
     session.add(detail)
     session.flush()
+
+    experiment.status = ExperimentStatus.COMPLETE.value
+    _audit(
+        session,
+        scope=scope,
+        action="EXPERIMENT_COMPLETED",
+        object_type="Experiment",
+        object_id=experiment.id,
+        payload={
+            "experiment_result_id": result.id,
+            "metric_version_id": metric.id,
+            "result_class": result_class,
+        },
+        correlation_id=f"checkpoint:{checkpoint.experiment_id}",
+        causation_id=result.id,
+    )
+
     _audit(
         session,
         scope=scope,
