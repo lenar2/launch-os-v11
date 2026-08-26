@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, cast
@@ -612,7 +612,7 @@ def _materialize_specialist_contributions(
             output = SpecialistContribution.model_validate(run.output_data)
         except ValidationError as exc:
             raise PermanentJobError("specialist output failed schema validation") from exc
-        _validate_evidence_refs(session, workflow=workflow, refs=output.evidence_refs)
+        _validate_evidence_refs(session, workflow=workflow, run=run, refs=output.evidence_refs)
         definition = _definition_for_run(session, run)
         row = SpecialistContributionModel(
             id=new_id(),
@@ -665,7 +665,7 @@ def _materialize_candidate(
         raise PermanentJobError("DecisionCandidate output failed schema validation") from exc
     if not output.selected_action.strip():
         raise PermanentJobError("DecisionCandidate selected_action is required")
-    _validate_evidence_refs(session, workflow=workflow, refs=output.evidence_refs)
+    _validate_evidence_refs(session, workflow=workflow, run=run, refs=output.evidence_refs)
     previous = _latest_candidate_or_none(session, workflow)
     contribution_ids = [row.id for row in _specialist_contributions(session, workflow)]
     row = DecisionCandidateModel(
@@ -727,7 +727,7 @@ def _materialize_controller_reviews(
             raise PermanentJobError("ControllerReview output failed schema validation") from exc
         if output.controller_type != controller_type:
             raise PermanentJobError("ControllerReview controller_type does not match contract")
-        _validate_evidence_refs(session, workflow=workflow, refs=output.evidence_refs)
+        _validate_evidence_refs(session, workflow=workflow, run=run, refs=output.evidence_refs)
         _validate_controller_verdict(
             controller_type=controller_type,
             candidate=candidate,
@@ -949,21 +949,80 @@ def _validate_evidence_refs(
     session: Session,
     *,
     workflow: DecisionWorkflowModel,
-    refs: list[Any],
+    run: AgentRunModel,
+    refs: Sequence[Any],
 ) -> None:
-    snapshot = _snapshot(session, scope=_scope(workflow), snapshot_id=workflow.snapshot_id)
-    snapshot_evidence = {
-        str(item["id"]): str(item["status"])
-        for item in snapshot.payload.get("evidence", [])
-        if isinstance(item, dict) and "id" in item and "status" in item
-    }
+    expected_status_by_ref = _agent_run_evidence_ref_statuses(
+        session,
+        workflow=workflow,
+        run=run,
+    )
     for ref in refs:
         evidence_id = ref.evidence_id
-        expected_status = snapshot_evidence.get(evidence_id)
+        expected_status = expected_status_by_ref.get(evidence_id)
         if expected_status is None:
             raise PermanentJobError(f"unsupported evidence reference: {evidence_id}")
         if expected_status != ref.epistemic_status.value:
             raise PermanentJobError("evidence reference epistemic status mismatch")
+
+
+def _agent_run_evidence_ref_statuses(
+    session: Session,
+    *,
+    workflow: DecisionWorkflowModel,
+    run: AgentRunModel,
+) -> dict[str, str]:
+    _scope(workflow).assert_matches(
+        organization_id=run.organization_id,
+        business_id=run.business_id,
+    )
+    statuses = _manifest_evidence_ref_statuses(run.context_manifest)
+    if f"business_snapshot:{workflow.snapshot_id}" in statuses:
+        statuses.update(_snapshot_evidence_ref_statuses(session, workflow=workflow))
+    return statuses
+
+
+def _manifest_evidence_ref_statuses(manifest: object) -> dict[str, str]:
+    if not isinstance(manifest, dict):
+        return {}
+    items = manifest.get("items")
+    if not isinstance(items, list):
+        return {}
+    statuses: dict[str, str] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        epistemic_status = item.get("epistemic_status")
+        if not isinstance(epistemic_status, str):
+            continue
+        provenance_ref = item.get("provenance_ref")
+        if isinstance(provenance_ref, str):
+            statuses[provenance_ref] = epistemic_status
+        source_object_type = item.get("source_object_type")
+        source_object_id = item.get("source_object_id")
+        if source_object_type == "evidence" and isinstance(source_object_id, str):
+            statuses[source_object_id] = epistemic_status
+    return statuses
+
+
+def _snapshot_evidence_ref_statuses(
+    session: Session,
+    *,
+    workflow: DecisionWorkflowModel,
+) -> dict[str, str]:
+    snapshot = _snapshot(session, scope=_scope(workflow), snapshot_id=workflow.snapshot_id)
+    items = snapshot.payload.get("evidence", [])
+    if not isinstance(items, list):
+        return {}
+    statuses: dict[str, str] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        evidence_id = item.get("id")
+        epistemic_status = item.get("status")
+        if isinstance(evidence_id, str) and isinstance(epistemic_status, str):
+            statuses[evidence_id] = epistemic_status
+    return statuses
 
 
 def _snapshot_payload(

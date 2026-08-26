@@ -291,6 +291,92 @@ def test_controller_block_prevents_final_decision_materialization(engine) -> Non
         session.close()
 
 
+def test_specialist_output_can_reference_manifest_business_snapshot_provenance(engine) -> None:
+    factory = create_session_factory(engine)
+    scope = _seed_business_graph_in_factory(factory, suffix="snapshot-ref")
+    queue = ListJobQueue()
+    clock = FixedClock(_now())
+    workflow_id = _start_workflow_in_factory(factory, scope=scope, queue=queue, clock=clock)
+    snapshot_ref = _snapshot_provenance_ref(factory, workflow_id)
+    script = [
+        FakeAdapterScriptStep(
+            kind=ModelResultKind.PARSED,
+            payload=_specialist_payload(role, snapshot_ref),
+        )
+        for role in ("Audience Intelligence", "Revenue/Funnel Strategist", "Launch Strategist")
+    ]
+    worker = _phase3_worker(factory=factory, queue=queue, clock=clock, script=script)
+
+    assert worker.process_one_from_queue() is not None
+    for _ in range(3):
+        result = worker.process_one_from_queue()
+        assert result is not None
+        assert result.status == "SUCCEEDED"
+    result = worker.process_one_from_queue()
+
+    assert result is not None
+    assert result.status == "SUCCEEDED"
+    session = factory()
+    try:
+        workflow = session.get(models.DecisionWorkflowModel, workflow_id)
+        assert workflow is not None
+        assert workflow.status == DecisionWorkflowStatus.CHIEF_RUNNING.value
+        contributions = session.scalars(select(models.SpecialistContributionModel)).all()
+        assert len(contributions) == 3
+        assert {row.evidence_refs[0]["evidence_id"] for row in contributions} == {snapshot_ref}
+        for contribution in contributions:
+            assert contribution.context_manifest["items"][0]["provenance_ref"] == snapshot_ref
+        assert session.scalar(select(func.count()).select_from(models.DecisionModel)) == 0
+        assert session.scalar(select(func.count()).select_from(models.ExecutionModel)) == 0
+        assert session.scalar(select(func.count()).select_from(models.PublicationModel)) == 0
+    finally:
+        session.close()
+
+
+def test_specialist_output_cannot_rewrite_manifest_epistemic_status(engine) -> None:
+    factory = create_session_factory(engine)
+    scope = _seed_business_graph_in_factory(factory, suffix="snapshot-status")
+    queue = ListJobQueue()
+    clock = FixedClock(_now())
+    workflow_id = _start_workflow_in_factory(factory, scope=scope, queue=queue, clock=clock)
+    snapshot_ref = _snapshot_provenance_ref(factory, workflow_id)
+    script = [
+        FakeAdapterScriptStep(
+            kind=ModelResultKind.PARSED,
+            payload=_specialist_payload(
+                role,
+                snapshot_ref,
+                evidence_status=EpistemicStatus.OBSERVATION,
+            ),
+        )
+        for role in ("Audience Intelligence", "Revenue/Funnel Strategist", "Launch Strategist")
+    ]
+    worker = _phase3_worker(factory=factory, queue=queue, clock=clock, script=script)
+
+    assert worker.process_one_from_queue() is not None
+    for _ in range(3):
+        result = worker.process_one_from_queue()
+        assert result is not None
+        assert result.status == "SUCCEEDED"
+    result = worker.process_one_from_queue()
+
+    assert result is not None
+    assert result.status == "FAILED"
+    session = factory()
+    try:
+        failed_job = session.get(models.JobModel, result.job_id)
+        assert failed_job is not None
+        assert failed_job.error_summary is not None
+        assert "evidence reference epistemic status mismatch" in failed_job.error_summary
+        assert (
+            session.scalar(select(func.count()).select_from(models.SpecialistContributionModel))
+            == 0
+        )
+        assert session.scalar(select(func.count()).select_from(models.DecisionModel)) == 0
+    finally:
+        session.close()
+
+
 def test_decision_approval_binds_exact_decision_version() -> None:
     decision = models.DecisionModel(
         id="decision-v1",
@@ -402,6 +488,19 @@ def _start_workflow_in_factory(
         session.close()
 
 
+def _snapshot_provenance_ref(
+    factory: sessionmaker[Session],
+    workflow_id: str,
+) -> str:
+    session = factory()
+    try:
+        workflow = session.get(models.DecisionWorkflowModel, workflow_id)
+        assert workflow is not None
+        return f"business_snapshot:{workflow.snapshot_id}"
+    finally:
+        session.close()
+
+
 def _seed_business_graph_in_factory(
     factory: sessionmaker[Session],
     *,
@@ -490,15 +589,24 @@ def _seed_business_graph(session: Session, *, suffix: str) -> TenantScope:
     return scope
 
 
-def _evidence_ref(evidence_id: str) -> dict[str, object]:
+def _evidence_ref(
+    evidence_id: str,
+    *,
+    evidence_status: EpistemicStatus = EpistemicStatus.FACT,
+) -> dict[str, object]:
     return {
         "evidence_id": evidence_id,
-        "epistemic_status": EpistemicStatus.FACT.value,
+        "epistemic_status": evidence_status.value,
         "note": "Seeded fact",
     }
 
 
-def _specialist_payload(role: str, evidence_id: str) -> dict[str, object]:
+def _specialist_payload(
+    role: str,
+    evidence_id: str,
+    *,
+    evidence_status: EpistemicStatus = EpistemicStatus.FACT,
+) -> dict[str, object]:
     return {
         "schema_name": "SpecialistContribution",
         "schema_version": 1,
@@ -535,7 +643,7 @@ def _specialist_payload(role: str, evidence_id: str) -> dict[str, object]:
             }
         ],
         "confidence": 0.65,
-        "evidence_refs": [_evidence_ref(evidence_id)],
+        "evidence_refs": [_evidence_ref(evidence_id, evidence_status=evidence_status)],
     }
 
 
