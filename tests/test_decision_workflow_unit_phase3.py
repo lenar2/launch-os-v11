@@ -291,6 +291,136 @@ def test_controller_block_prevents_final_decision_materialization(engine) -> Non
         session.close()
 
 
+def test_controller_display_aliases_materialize_as_canonical_types(engine) -> None:
+    factory = create_session_factory(engine)
+    scope = _seed_business_graph_in_factory(factory, suffix="controller-alias")
+    queue = ListJobQueue()
+    clock = FixedClock(_now())
+    workflow_id = _start_workflow_in_factory(factory, scope=scope, queue=queue, clock=clock)
+    snapshot_ref = _snapshot_provenance_ref(factory, workflow_id)
+    alias_by_contract = {
+        "ai.controller.evidence": "EvidenceController",
+        "ai.controller.strategy_red_team": "Strategy Red Team",
+        "ai.controller.constitutional": "constitutional",
+        "ai.controller.decision_quality": "DecisionQualityController",
+        "ai.controller.economics": "EconomicsController",
+        "ai.controller.manipulation": "ManipulationController",
+        "ai.controller.anti_analysis_paralysis": "Anti-Analysis-Paralysis Controller",
+    }
+    script = [
+        *[
+            FakeAdapterScriptStep(
+                kind=ModelResultKind.PARSED,
+                payload=_specialist_payload(role, snapshot_ref),
+            )
+            for role in (
+                "Audience Intelligence",
+                "Revenue/Funnel Strategist",
+                "Launch Strategist",
+            )
+        ],
+        FakeAdapterScriptStep(
+            kind=ModelResultKind.PARSED,
+            payload=_candidate_payload(snapshot_ref, selected_action="Test concise offer copy"),
+        ),
+        *[
+            FakeAdapterScriptStep(
+                kind=ModelResultKind.PARSED,
+                payload=_controller_payload(
+                    alias_by_contract[contract_key],
+                    snapshot_ref,
+                    verdict=ControllerVerdict.PASS,
+                ),
+            )
+            for contract_key in REQUIRED_CONTROLLER_CONTRACT_KEYS
+        ],
+    ]
+    worker = _phase3_worker(factory=factory, queue=queue, clock=clock, script=script)
+    _process_all(worker, queue)
+
+    session = factory()
+    try:
+        workflow = session.get(models.DecisionWorkflowModel, workflow_id)
+        assert workflow is not None
+        assert workflow.status == DecisionWorkflowStatus.AWAITING_DECISION_APPROVAL.value
+        reviews = session.scalars(
+            select(models.ControllerReviewModel).where(
+                models.ControllerReviewModel.decision_candidate_id.is_not(None)
+            )
+        ).all()
+        assert {review.controller_type for review in reviews} == {
+            key.removeprefix("ai.controller.") for key in REQUIRED_CONTROLLER_CONTRACT_KEYS
+        }
+        assert {review.controller_name for review in reviews} == set(alias_by_contract.values())
+    finally:
+        session.close()
+
+
+def test_wrong_controller_identity_is_rejected(engine) -> None:
+    factory = create_session_factory(engine)
+    scope = _seed_business_graph_in_factory(factory, suffix="controller-mismatch")
+    queue = ListJobQueue()
+    clock = FixedClock(_now())
+    workflow_id = _start_workflow_in_factory(factory, scope=scope, queue=queue, clock=clock)
+    snapshot_ref = _snapshot_provenance_ref(factory, workflow_id)
+    script = [
+        *[
+            FakeAdapterScriptStep(
+                kind=ModelResultKind.PARSED,
+                payload=_specialist_payload(role, snapshot_ref),
+            )
+            for role in (
+                "Audience Intelligence",
+                "Revenue/Funnel Strategist",
+                "Launch Strategist",
+            )
+        ],
+        FakeAdapterScriptStep(
+            kind=ModelResultKind.PARSED,
+            payload=_candidate_payload(snapshot_ref, selected_action="Test concise offer copy"),
+        ),
+        *[
+            FakeAdapterScriptStep(
+                kind=ModelResultKind.PARSED,
+                payload=_controller_payload(
+                    "economics"
+                    if contract_key == "ai.controller.evidence"
+                    else contract_key.removeprefix("ai.controller."),
+                    snapshot_ref,
+                    verdict=ControllerVerdict.PASS,
+                ),
+            )
+            for contract_key in REQUIRED_CONTROLLER_CONTRACT_KEYS
+        ],
+    ]
+    worker = _phase3_worker(factory=factory, queue=queue, clock=clock, script=script)
+    _process_all(worker, queue)
+
+    session = factory()
+    try:
+        workflow = session.get(models.DecisionWorkflowModel, workflow_id)
+        assert workflow is not None
+        assert workflow.status == DecisionWorkflowStatus.CONTROLLERS_RUNNING.value
+        failed_job = session.scalar(
+            select(models.JobModel)
+            .where(
+                models.JobModel.job_type == "workflow.advance",
+                models.JobModel.status == "FAILED",
+            )
+            .order_by(models.JobModel.completed_at.desc())
+            .limit(1)
+        )
+        assert failed_job is not None
+        assert failed_job.error_summary is not None
+        assert (
+            "ControllerReview controller_type does not match contract"
+            in failed_job.error_summary
+        )
+        assert session.scalar(select(func.count()).select_from(models.DecisionModel)) == 0
+    finally:
+        session.close()
+
+
 def test_specialist_output_can_reference_manifest_business_snapshot_provenance(engine) -> None:
     factory = create_session_factory(engine)
     scope = _seed_business_graph_in_factory(factory, suffix="snapshot-ref")

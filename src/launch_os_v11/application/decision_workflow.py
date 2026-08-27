@@ -104,6 +104,29 @@ class DecisionCandidateStatus(StrEnum):
 
 
 DECISION_APPROVAL_ACTION = "approve_decision_for_production"
+_CONTROLLER_TYPE_ALIASES = {
+    "evidence": frozenset({"evidence", "evidencecontroller", "evidencecontrollerreview"}),
+    "strategy_red_team": frozenset(
+        {"strategyredteam", "strategyredteamcontroller", "strategyredteamreview"}
+    ),
+    "constitutional": frozenset(
+        {"constitutional", "constitutionalcontroller", "constitutionalcontrollerreview"}
+    ),
+    "decision_quality": frozenset(
+        {"decisionquality", "decisionqualitycontroller", "decisionqualitycontrollerreview"}
+    ),
+    "economics": frozenset({"economics", "economicscontroller", "economicscontrollerreview"}),
+    "manipulation": frozenset(
+        {"manipulation", "manipulationcontroller", "manipulationcontrollerreview"}
+    ),
+    "anti_analysis_paralysis": frozenset(
+        {
+            "antianalysisparalysis",
+            "antianalysisparalysiscontroller",
+            "antianalysisparalysiscontrollerreview",
+        }
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -725,8 +748,10 @@ def _materialize_controller_reviews(
             output = ControllerReviewOutput.model_validate(run.output_data)
         except ValidationError as exc:
             raise PermanentJobError("ControllerReview output failed schema validation") from exc
-        if output.controller_type != controller_type:
-            raise PermanentJobError("ControllerReview controller_type does not match contract")
+        _assert_controller_type_matches_contract(
+            expected_controller_type=controller_type,
+            output_controller_type=output.controller_type,
+        )
         _validate_evidence_refs(session, workflow=workflow, run=run, refs=output.evidence_refs)
         _validate_controller_verdict(
             controller_type=controller_type,
@@ -746,7 +771,7 @@ def _materialize_controller_reviews(
             decision_candidate_id=candidate.id,
             agent_run_id=run.id,
             snapshot_id=workflow.snapshot_id,
-            controller_type=output.controller_type,
+            controller_type=controller_type,
             contract_key=run.agent_contract_key,
             contract_version=run.agent_contract_version,
             instruction_version=definition.instruction_version,
@@ -902,6 +927,22 @@ def _controller_outcome(reviews: tuple[ControllerReviewModel, ...]) -> Controlle
     if ControllerVerdict.PASS_WITH_CONDITIONS in verdicts:
         return ControllerVerdict.PASS_WITH_CONDITIONS
     return ControllerVerdict.PASS
+
+
+def _assert_controller_type_matches_contract(
+    *,
+    expected_controller_type: str,
+    output_controller_type: str,
+) -> None:
+    aliases = _CONTROLLER_TYPE_ALIASES.get(expected_controller_type)
+    if aliases is None:
+        raise PermanentJobError("unknown controller contract type")
+    if _controller_type_token(output_controller_type) not in aliases:
+        raise PermanentJobError("ControllerReview controller_type does not match contract")
+
+
+def _controller_type_token(value: str) -> str:
+    return "".join(character for character in value.lower() if character.isalnum())
 
 
 def _validate_controller_verdict(
