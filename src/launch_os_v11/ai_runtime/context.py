@@ -128,10 +128,19 @@ class ContextBuilder:
         if missing:
             raise AIContextError(f"required context missing: {', '.join(sorted(missing))}")
 
+        allowed_evidence_refs = _allowed_evidence_refs(limited_items)
         context_payload = {
             "schema_name": "AgentScopedContext",
             "schema_version": 1,
             "purpose": contract.contract_key,
+            "evidence_ref_policy": {
+                "allowed_refs": allowed_evidence_refs,
+                "output_rule": (
+                    "If the output schema includes evidence_refs, evidence_id must be one "
+                    "of allowed_refs exactly and must use the listed epistemic_status. "
+                    "Do not use IDs embedded inside content unless they are listed here."
+                ),
+            },
             "items": [item.model_dump(mode="json") for item in limited_items],
         }
         assert_no_secrets(context_payload)
@@ -571,6 +580,25 @@ def _controller_review_item(
         structured_projection=payload,
         retention="AUDIT",
     )
+
+
+def _allowed_evidence_refs(items: tuple[ContextItem, ...]) -> list[JsonObject]:
+    refs: list[JsonObject] = []
+    for item in items:
+        refs.append(
+            {
+                "evidence_id": item.provenance_ref,
+                "epistemic_status": item.epistemic_status.value,
+            }
+        )
+        if item.source_object_type == "evidence":
+            refs.append(
+                {
+                    "evidence_id": item.source_object_id,
+                    "epistemic_status": item.epistemic_status.value,
+                }
+            )
+    return refs
 
 
 def _truncate(value: str, max_chars: int) -> str:

@@ -356,7 +356,7 @@ def test_controller_display_aliases_materialize_as_canonical_types(engine) -> No
         session.close()
 
 
-def test_wrong_controller_identity_is_rejected(engine) -> None:
+def test_wrong_controller_identity_is_retried_without_materializing_bad_run(engine) -> None:
     factory = create_session_factory(engine)
     scope = _seed_business_graph_in_factory(factory, suffix="controller-mismatch")
     queue = ListJobQueue()
@@ -392,6 +392,14 @@ def test_wrong_controller_identity_is_rejected(engine) -> None:
             )
             for contract_key in REQUIRED_CONTROLLER_CONTRACT_KEYS
         ],
+        FakeAdapterScriptStep(
+            kind=ModelResultKind.PARSED,
+            payload=_controller_payload(
+                "evidence",
+                snapshot_ref,
+                verdict=ControllerVerdict.PASS,
+            ),
+        ),
     ]
     worker = _phase3_worker(factory=factory, queue=queue, clock=clock, script=script)
     _process_all(worker, queue)
@@ -400,23 +408,110 @@ def test_wrong_controller_identity_is_rejected(engine) -> None:
     try:
         workflow = session.get(models.DecisionWorkflowModel, workflow_id)
         assert workflow is not None
-        assert workflow.status == DecisionWorkflowStatus.CONTROLLERS_RUNNING.value
-        failed_job = session.scalar(
-            select(models.JobModel)
+        assert workflow.status == DecisionWorkflowStatus.AWAITING_DECISION_APPROVAL.value
+        evidence_runs = session.scalars(
+            select(models.AgentRunModel)
             .where(
-                models.JobModel.job_type == "workflow.advance",
-                models.JobModel.status == "FAILED",
+                models.AgentRunModel.input_ref
+                == (
+                    f"decision_workflow:{workflow_id}:candidate:1:"
+                    "ai.controller.evidence"
+                )
             )
-            .order_by(models.JobModel.completed_at.desc())
-            .limit(1)
+            .order_by(models.AgentRunModel.created_at)
+        ).all()
+        assert [run.output_data["controller_type"] for run in evidence_runs] == [
+            "economics",
+            "evidence",
+        ]
+        valid_evidence_run_id = evidence_runs[-1].id
+        evidence_review = session.scalar(
+            select(models.ControllerReviewModel).where(
+                models.ControllerReviewModel.controller_type == "evidence"
+            )
         )
-        assert failed_job is not None
-        assert failed_job.error_summary is not None
-        assert (
-            "ControllerReview controller_type does not match contract"
-            in failed_job.error_summary
+        assert evidence_review is not None
+        assert evidence_review.agent_run_id == valid_evidence_run_id
+    finally:
+        session.close()
+
+
+def test_unscoped_controller_evidence_ref_is_retried_without_materializing_bad_run(
+    engine,
+) -> None:
+    factory = create_session_factory(engine)
+    scope = _seed_business_graph_in_factory(factory, suffix="controller-bad-evidence")
+    queue = ListJobQueue()
+    clock = FixedClock(_now())
+    workflow_id = _start_workflow_in_factory(factory, scope=scope, queue=queue, clock=clock)
+    snapshot_ref = _snapshot_provenance_ref(factory, workflow_id)
+    bad_evidence_ref = "9082f10d-208a-4356-b5f2-ed7c5d2cb1b0"
+    script = [
+        *[
+            FakeAdapterScriptStep(
+                kind=ModelResultKind.PARSED,
+                payload=_specialist_payload(role, snapshot_ref),
+            )
+            for role in (
+                "Audience Intelligence",
+                "Revenue/Funnel Strategist",
+                "Launch Strategist",
+            )
+        ],
+        FakeAdapterScriptStep(
+            kind=ModelResultKind.PARSED,
+            payload=_candidate_payload(snapshot_ref, selected_action="Test concise offer copy"),
+        ),
+        *[
+            FakeAdapterScriptStep(
+                kind=ModelResultKind.PARSED,
+                payload=_controller_payload(
+                    contract_key.removeprefix("ai.controller."),
+                    bad_evidence_ref if contract_key == "ai.controller.evidence" else snapshot_ref,
+                    verdict=ControllerVerdict.PASS,
+                ),
+            )
+            for contract_key in REQUIRED_CONTROLLER_CONTRACT_KEYS
+        ],
+        FakeAdapterScriptStep(
+            kind=ModelResultKind.PARSED,
+            payload=_controller_payload(
+                "evidence",
+                snapshot_ref,
+                verdict=ControllerVerdict.PASS,
+            ),
+        ),
+    ]
+    worker = _phase3_worker(factory=factory, queue=queue, clock=clock, script=script)
+    _process_all(worker, queue)
+
+    session = factory()
+    try:
+        workflow = session.get(models.DecisionWorkflowModel, workflow_id)
+        assert workflow is not None
+        assert workflow.status == DecisionWorkflowStatus.AWAITING_DECISION_APPROVAL.value
+        evidence_runs = session.scalars(
+            select(models.AgentRunModel)
+            .where(
+                models.AgentRunModel.input_ref
+                == (
+                    f"decision_workflow:{workflow_id}:candidate:1:"
+                    "ai.controller.evidence"
+                )
+            )
+            .order_by(models.AgentRunModel.created_at)
+        ).all()
+        assert [run.output_data["evidence_refs"][0]["evidence_id"] for run in evidence_runs] == [
+            bad_evidence_ref,
+            snapshot_ref,
+        ]
+        evidence_review = session.scalar(
+            select(models.ControllerReviewModel).where(
+                models.ControllerReviewModel.controller_type == "evidence"
+            )
         )
-        assert session.scalar(select(func.count()).select_from(models.DecisionModel)) == 0
+        assert evidence_review is not None
+        assert evidence_review.agent_run_id == evidence_runs[-1].id
     finally:
         session.close()
 

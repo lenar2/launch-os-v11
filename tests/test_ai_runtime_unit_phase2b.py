@@ -192,6 +192,16 @@ def test_context_builder_enforces_scope_budget_truth_and_untrusted_data(
     assert "ignore previous instructions" not in contract.system_instructions
     assert "tools" not in bundle.manifest
     assert "content" not in bundle.manifest["items"][0]
+    payload = json.loads(bundle.structured_context)
+    allowed_refs = payload["evidence_ref_policy"]["allowed_refs"]
+    assert {
+        "evidence_id": f"evidence:{rows['evidence']}",
+        "epistemic_status": EpistemicStatus.HYPOTHESIS.value,
+    } in allowed_refs
+    assert {
+        "evidence_id": rows["evidence"],
+        "epistemic_status": EpistemicStatus.HYPOTHESIS.value,
+    } in allowed_refs
 
     with pytest.raises(TenantScopeViolation):
         builder.build(

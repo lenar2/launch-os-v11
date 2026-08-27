@@ -104,6 +104,12 @@ class DecisionCandidateStatus(StrEnum):
 
 
 DECISION_APPROVAL_ACTION = "approve_decision_for_production"
+_PENDING_AGENT_RUN_STATUSES = {
+    AgentRunStatus.QUEUED.value,
+    AgentRunStatus.RUNNING.value,
+    AgentRunStatus.RETRY_WAIT.value,
+}
+_MAX_CONTROLLER_OUTPUT_ATTEMPTS = 3
 _CONTROLLER_TYPE_ALIASES = {
     "evidence": frozenset({"evidence", "evidencecontroller", "evidencecontrollerreview"}),
     "strategy_red_team": frozenset(
@@ -469,6 +475,27 @@ def _advance_workflow(
         return
     if status == DecisionWorkflowStatus.CONTROLLERS_RUNNING:
         candidate = _latest_candidate(session, workflow)
+        not_ready_controller_runs = _ensure_controller_runs(
+            session,
+            workflow=workflow,
+            candidate=candidate,
+            queue=queue,
+            clock=clock,
+            registry=registry,
+        )
+        if not_ready_controller_runs:
+            generation = _controller_run_generation(session, workflow, candidate)
+            _enqueue_workflow_advance(
+                session,
+                workflow=workflow,
+                queue=queue,
+                clock=clock,
+                suffix=(
+                    f"after-controllers:{candidate.version_number}:"
+                    f"controller-output-retry:{generation}"
+                ),
+            )
+            return
         reviews = _materialize_controller_reviews(session, workflow=workflow, candidate=candidate)
         outcome = _controller_outcome(reviews)
         if outcome == ControllerVerdict.BLOCK:
@@ -590,29 +617,54 @@ def _ensure_controller_runs(
     queue: JobQueue,
     clock: Clock,
     registry: AgentRegistry,
-) -> None:
+) -> int:
     service = AgentRunService(registry=registry, queue=queue, clock=clock)
     scope = TenantScope(organization_id=workflow.organization_id, business_id=workflow.business_id)
     refs = (
         ContextReference(object_type="business_snapshot", object_id=workflow.snapshot_id),
         ContextReference(object_type="decision_candidate", object_id=candidate.id),
     )
+    not_ready_count = 0
     for contract_key in REQUIRED_CONTROLLER_CONTRACT_KEYS:
+        controller_type = contract_key.removeprefix("ai.controller.")
+        run_state = _controller_run_state(
+            session,
+            workflow=workflow,
+            candidate=candidate,
+            contract_key=contract_key,
+            controller_type=controller_type,
+        )
+        if run_state == "ready":
+            continue
+        not_ready_count += 1
+        if run_state == "pending":
+            continue
+        idempotency_key = _next_controller_run_idempotency_key(
+            session,
+            workflow=workflow,
+            candidate=candidate,
+            contract_key=contract_key,
+        )
+        if idempotency_key is None:
+            continue
+        input_ref = _controller_run_input_ref(
+            workflow=workflow,
+            candidate=candidate,
+            contract_key=contract_key,
+        )
         service.create_agent_run(
             session,
             scope=scope,
             contract_key=contract_key,
             contract_version=1,
-            input_ref=f"decision_workflow:{workflow.id}:candidate:{candidate.version_number}:{contract_key}",
+            input_ref=input_ref,
             context_refs=refs,
             correlation_id=workflow.correlation_id,
             causation_id=candidate.id,
             job_type=JOB_TYPE_AI_RUN_CONTROLLER,
-            idempotency_key=(
-                f"decision_workflow:{workflow.id}:candidate:"
-                f"{candidate.version_number}:{contract_key}"
-            ),
+            idempotency_key=idempotency_key,
         )
+    return not_ready_count
 
 
 def _materialize_specialist_contributions(
@@ -737,10 +789,12 @@ def _materialize_controller_reviews(
         if existing is not None:
             reviews.append(existing)
             continue
-        run = _agent_run_by_idempotency(
+        run = _controller_agent_run(
             session,
-            workflow,
-            f"decision_workflow:{workflow.id}:candidate:{candidate.version_number}:{contract_key}",
+            workflow=workflow,
+            candidate=candidate,
+            contract_key=contract_key,
+            controller_type=controller_type,
         )
         if run.status != AgentRunStatus.SUCCEEDED.value or run.output_data is None:
             raise TransientJobError(f"controller run is not ready: {controller_type}")
@@ -794,6 +848,181 @@ def _materialize_controller_reviews(
     candidate.controller_review_ids = [review.id for review in reviews]
     session.flush()
     return tuple(reviews)
+
+
+def _next_controller_run_idempotency_key(
+    session: Session,
+    *,
+    workflow: DecisionWorkflowModel,
+    candidate: DecisionCandidateModel,
+    contract_key: str,
+) -> str:
+    runs = _controller_agent_runs(
+        session,
+        workflow=workflow,
+        candidate=candidate,
+        contract_key=contract_key,
+    )
+    base_key = _controller_run_input_ref(
+        workflow=workflow,
+        candidate=candidate,
+        contract_key=contract_key,
+    )
+    if not runs:
+        return base_key
+    return f"{base_key}:retry:{len(runs) + 1}"
+
+
+def _controller_run_state(
+    session: Session,
+    *,
+    workflow: DecisionWorkflowModel,
+    candidate: DecisionCandidateModel,
+    contract_key: str,
+    controller_type: str,
+) -> str:
+    runs = _controller_agent_runs(
+        session,
+        workflow=workflow,
+        candidate=candidate,
+        contract_key=contract_key,
+    )
+    if any(run.status in _PENDING_AGENT_RUN_STATUSES for run in runs):
+        return "pending"
+    if any(
+        _controller_run_can_materialize(
+            session,
+            workflow=workflow,
+            candidate=candidate,
+            run=run,
+            controller_type=controller_type,
+        )
+        for run in runs
+    ):
+        return "ready"
+    if len(runs) >= _MAX_CONTROLLER_OUTPUT_ATTEMPTS:
+        raise PermanentJobError("ControllerReview output retry limit exceeded")
+    return "create"
+
+
+def _controller_agent_run(
+    session: Session,
+    *,
+    workflow: DecisionWorkflowModel,
+    candidate: DecisionCandidateModel,
+    contract_key: str,
+    controller_type: str,
+) -> AgentRunModel:
+    runs = _controller_agent_runs(
+        session,
+        workflow=workflow,
+        candidate=candidate,
+        contract_key=contract_key,
+    )
+    for run in runs:
+        if _controller_run_can_materialize(
+            session,
+            workflow=workflow,
+            candidate=candidate,
+            run=run,
+            controller_type=controller_type,
+        ):
+            return run
+    if any(run.status in _PENDING_AGENT_RUN_STATUSES for run in runs):
+        raise TransientJobError(f"controller run is not ready: {controller_type}")
+    if len(runs) >= _MAX_CONTROLLER_OUTPUT_ATTEMPTS:
+        raise PermanentJobError("ControllerReview output retry limit exceeded")
+    raise TransientJobError(f"controller run is not ready: {controller_type}")
+
+
+def _controller_agent_runs(
+    session: Session,
+    *,
+    workflow: DecisionWorkflowModel,
+    candidate: DecisionCandidateModel,
+    contract_key: str,
+) -> tuple[AgentRunModel, ...]:
+    input_ref = _controller_run_input_ref(
+        workflow=workflow,
+        candidate=candidate,
+        contract_key=contract_key,
+    )
+    return tuple(
+        session.scalars(
+            select(AgentRunModel)
+            .where(
+                AgentRunModel.organization_id == workflow.organization_id,
+                AgentRunModel.business_id == workflow.business_id,
+                AgentRunModel.agent_contract_key == contract_key,
+                AgentRunModel.agent_contract_version == 1,
+                AgentRunModel.input_ref == input_ref,
+            )
+            .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
+        )
+    )
+
+
+def _controller_run_generation(
+    session: Session,
+    workflow: DecisionWorkflowModel,
+    candidate: DecisionCandidateModel,
+) -> int:
+    input_refs = [
+        _controller_run_input_ref(
+            workflow=workflow,
+            candidate=candidate,
+            contract_key=contract_key,
+        )
+        for contract_key in REQUIRED_CONTROLLER_CONTRACT_KEYS
+    ]
+    return int(
+        session.scalar(
+            select(func.count())
+            .select_from(AgentRunModel)
+            .where(
+                AgentRunModel.organization_id == workflow.organization_id,
+                AgentRunModel.business_id == workflow.business_id,
+                AgentRunModel.input_ref.in_(input_refs),
+            )
+        )
+        or 0
+    )
+
+
+def _controller_run_input_ref(
+    *,
+    workflow: DecisionWorkflowModel,
+    candidate: DecisionCandidateModel,
+    contract_key: str,
+) -> str:
+    return f"decision_workflow:{workflow.id}:candidate:{candidate.version_number}:{contract_key}"
+
+
+def _controller_run_can_materialize(
+    session: Session,
+    *,
+    workflow: DecisionWorkflowModel,
+    candidate: DecisionCandidateModel,
+    run: AgentRunModel,
+    controller_type: str,
+) -> bool:
+    if run.status != AgentRunStatus.SUCCEEDED.value or run.output_data is None:
+        return False
+    try:
+        output = ControllerReviewOutput.model_validate(run.output_data)
+        _assert_controller_type_matches_contract(
+            expected_controller_type=controller_type,
+            output_controller_type=output.controller_type,
+        )
+        _validate_evidence_refs(session, workflow=workflow, run=run, refs=output.evidence_refs)
+        _validate_controller_verdict(
+            controller_type=controller_type,
+            candidate=candidate,
+            output=output,
+        )
+    except (PermanentJobError, ValidationError):
+        return False
+    return True
 
 
 def _materialize_final_decision(

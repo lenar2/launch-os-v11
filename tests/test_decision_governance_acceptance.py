@@ -98,6 +98,7 @@ def test_pass_with_mandatory_conditions_requires_revision(monkeypatch: pytest.Mo
     calls: dict[str, int] = {"chief": 0, "enqueue": 0, "materialize": 0}
 
     monkeypatch.setattr(base, "_latest_candidate", lambda session, workflow: candidate)
+    monkeypatch.setattr(base, "_ensure_controller_runs", lambda *args, **kwargs: 0)
     monkeypatch.setattr(
         base,
         "_materialize_controller_reviews",
@@ -152,6 +153,7 @@ def test_resolved_conditions_allow_normal_approval_eligibility(
     calls = {"materialize": 0}
 
     monkeypatch.setattr(base, "_latest_candidate", lambda session, workflow: candidate)
+    monkeypatch.setattr(base, "_ensure_controller_runs", lambda *args, **kwargs: 0)
     monkeypatch.setattr(
         base,
         "_materialize_controller_reviews",

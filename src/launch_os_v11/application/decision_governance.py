@@ -73,6 +73,28 @@ def _advance_workflow(
         return
 
     candidate = base._latest_candidate(session, workflow)
+    not_ready_controller_runs = base._ensure_controller_runs(
+        session,
+        workflow=workflow,
+        candidate=candidate,
+        queue=queue,
+        clock=clock,
+        registry=registry,
+    )
+    if not_ready_controller_runs:
+        base._enqueue_workflow_advance(
+            session,
+            workflow=workflow,
+            queue=queue,
+            clock=clock,
+            suffix=(
+                f"after-controllers:{candidate.version_number}:"
+                "controller-output-retry:"
+                f"{base._controller_run_generation(session, workflow, candidate)}"
+            ),
+        )
+        return
+
     reviews = base._materialize_controller_reviews(
         session,
         workflow=workflow,
