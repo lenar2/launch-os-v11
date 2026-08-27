@@ -436,6 +436,68 @@ def test_invalid_specialist_output_is_retried_without_materializing_bad_run(engi
         session.close()
 
 
+def test_failed_chief_run_is_retried_without_materializing_bad_run(engine) -> None:
+    factory = create_session_factory(engine)
+    scope = _seed_business_graph_in_factory(factory, suffix="chief-retry")
+    queue = ListJobQueue()
+    clock = FixedClock(_now())
+    workflow_id = _start_workflow_in_factory(factory, scope=scope, queue=queue, clock=clock)
+    snapshot_ref = _snapshot_provenance_ref(factory, workflow_id)
+    script = [
+        *[
+            FakeAdapterScriptStep(
+                kind=ModelResultKind.PARSED,
+                payload=_specialist_payload(role, snapshot_ref),
+            )
+            for role in (
+                "Audience Intelligence",
+                "Revenue/Funnel Strategist",
+                "Launch Strategist",
+            )
+        ],
+        FakeAdapterScriptStep(kind="permanent_error"),
+        FakeAdapterScriptStep(
+            kind=ModelResultKind.PARSED,
+            payload=_candidate_payload(snapshot_ref, selected_action="Test concise offer copy"),
+        ),
+        *[
+            FakeAdapterScriptStep(
+                kind=ModelResultKind.PARSED,
+                payload=_controller_payload(
+                    contract_key.removeprefix("ai.controller."),
+                    snapshot_ref,
+                    verdict=ControllerVerdict.PASS,
+                ),
+            )
+            for contract_key in REQUIRED_CONTROLLER_CONTRACT_KEYS
+        ],
+    ]
+    worker = _phase3_worker(factory=factory, queue=queue, clock=clock, script=script)
+    _process_all(worker, queue)
+
+    session = factory()
+    try:
+        workflow = session.get(models.DecisionWorkflowModel, workflow_id)
+        assert workflow is not None
+        assert workflow.status == DecisionWorkflowStatus.AWAITING_DECISION_APPROVAL.value
+        chief_runs = session.scalars(
+            select(models.AgentRunModel)
+            .where(
+                models.AgentRunModel.input_ref == f"decision_workflow:{workflow_id}:chief:v1"
+            )
+            .order_by(models.AgentRunModel.created_at)
+        ).all()
+        assert [run.status for run in chief_runs] == [
+            AgentRunStatus.FAILED.value,
+            AgentRunStatus.SUCCEEDED.value,
+        ]
+        candidate = session.scalar(select(models.DecisionCandidateModel))
+        assert candidate is not None
+        assert candidate.chief_agent_run_id == chief_runs[-1].id
+    finally:
+        session.close()
+
+
 def test_wrong_controller_identity_is_retried_without_materializing_bad_run(engine) -> None:
     factory = create_session_factory(engine)
     scope = _seed_business_graph_in_factory(factory, suffix="controller-mismatch")

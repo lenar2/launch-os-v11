@@ -110,6 +110,7 @@ _PENDING_AGENT_RUN_STATUSES = {
     AgentRunStatus.RETRY_WAIT.value,
 }
 _MAX_SPECIALIST_OUTPUT_ATTEMPTS = 3
+_MAX_CHIEF_OUTPUT_ATTEMPTS = 3
 _MAX_CONTROLLER_OUTPUT_ATTEMPTS = 3
 _CONTROLLER_TYPE_ALIASES = {
     "evidence": frozenset({"evidence", "evidencecontroller", "evidencecontrollerreview"}),
@@ -471,6 +472,24 @@ def _advance_workflow(
         )
         return
     if status == DecisionWorkflowStatus.CHIEF_RUNNING:
+        not_ready_chief_run = _ensure_chief_run(
+            session,
+            workflow=workflow,
+            queue=queue,
+            clock=clock,
+            registry=registry,
+        )
+        if not_ready_chief_run:
+            version = _next_candidate_version(session, workflow)
+            generation = _chief_run_generation(session, workflow=workflow, version=version)
+            _enqueue_workflow_advance(
+                session,
+                workflow=workflow,
+                queue=queue,
+                clock=clock,
+                suffix=f"after-chief:{version}:chief-output-retry:{generation}",
+            )
+            return
         candidate = _materialize_candidate(session, workflow=workflow)
         workflow.status = DecisionWorkflowStatus.DECISION_CANDIDATE_READY.value
         _ensure_controller_runs(
@@ -610,9 +629,23 @@ def _ensure_chief_run(
     registry: AgentRegistry,
     previous_candidate: DecisionCandidateModel | None = None,
     reviews: tuple[ControllerReviewModel, ...] = (),
-) -> None:
+) -> int:
     service = AgentRunService(registry=registry, queue=queue, clock=clock)
     scope = TenantScope(organization_id=workflow.organization_id, business_id=workflow.business_id)
+    version = _next_candidate_version(session, workflow)
+    run_state = _chief_run_state(session, workflow=workflow, version=version)
+    if run_state == "ready":
+        return 0
+    if run_state == "pending":
+        return 1
+    if previous_candidate is None and not reviews:
+        previous_candidate = _candidate_for_version(
+            session,
+            workflow=workflow,
+            version=version - 1,
+        )
+        if previous_candidate is not None:
+            reviews = _controller_reviews(session, previous_candidate)
     refs = [ContextReference(object_type="business_snapshot", object_id=workflow.snapshot_id)]
     refs.extend(
         ContextReference(object_type="specialist_contribution", object_id=row.id)
@@ -629,19 +662,24 @@ def _ensure_chief_run(
         ContextReference(object_type="controller_review", object_id=review.id)
         for review in reviews
     )
-    version = _next_candidate_version(session, workflow)
+    input_ref = _chief_run_input_ref(workflow=workflow, version=version)
     service.create_agent_run(
         session,
         scope=scope,
         contract_key=CHIEF_GROWTH_PRODUCER_CONTRACT_KEY,
         contract_version=1,
-        input_ref=f"decision_workflow:{workflow.id}:chief:v{version}",
+        input_ref=input_ref,
         context_refs=tuple(refs),
         correlation_id=workflow.correlation_id,
         causation_id=workflow.id,
         job_type=JOB_TYPE_AI_RUN_AGENT,
-        idempotency_key=f"decision_workflow:{workflow.id}:chief:v{version}",
+        idempotency_key=_next_chief_run_idempotency_key(
+            session,
+            workflow=workflow,
+            version=version,
+        ),
     )
+    return 1
 
 
 def _ensure_controller_runs(
@@ -858,6 +896,124 @@ def _specialist_run_can_materialize(
     return True
 
 
+def _next_chief_run_idempotency_key(
+    session: Session,
+    *,
+    workflow: DecisionWorkflowModel,
+    version: int,
+) -> str:
+    runs = _chief_agent_runs(session, workflow=workflow, version=version)
+    base_key = _chief_run_input_ref(workflow=workflow, version=version)
+    if not runs:
+        return base_key
+    return f"{base_key}:retry:{len(runs) + 1}"
+
+
+def _chief_run_state(
+    session: Session,
+    *,
+    workflow: DecisionWorkflowModel,
+    version: int,
+) -> str:
+    runs = _chief_agent_runs(session, workflow=workflow, version=version)
+    if any(run.status in _PENDING_AGENT_RUN_STATUSES for run in runs):
+        return "pending"
+    if any(
+        _chief_run_can_materialize(session, workflow=workflow, run=run)
+        for run in runs
+    ):
+        return "ready"
+    if len(runs) >= _MAX_CHIEF_OUTPUT_ATTEMPTS:
+        raise PermanentJobError("DecisionCandidate output retry limit exceeded")
+    return "create"
+
+
+def _chief_agent_run(
+    session: Session,
+    *,
+    workflow: DecisionWorkflowModel,
+    version: int,
+) -> AgentRunModel:
+    runs = _chief_agent_runs(session, workflow=workflow, version=version)
+    for run in runs:
+        if _chief_run_can_materialize(session, workflow=workflow, run=run):
+            return run
+    if any(run.status in _PENDING_AGENT_RUN_STATUSES for run in runs):
+        raise TransientJobError("chief run is not ready")
+    if len(runs) >= _MAX_CHIEF_OUTPUT_ATTEMPTS:
+        raise PermanentJobError("DecisionCandidate output retry limit exceeded")
+    raise TransientJobError("chief run is not ready")
+
+
+def _chief_agent_runs(
+    session: Session,
+    *,
+    workflow: DecisionWorkflowModel,
+    version: int,
+) -> tuple[AgentRunModel, ...]:
+    return tuple(
+        session.scalars(
+            select(AgentRunModel)
+            .where(
+                AgentRunModel.organization_id == workflow.organization_id,
+                AgentRunModel.business_id == workflow.business_id,
+                AgentRunModel.agent_contract_key == CHIEF_GROWTH_PRODUCER_CONTRACT_KEY,
+                AgentRunModel.agent_contract_version == 1,
+                AgentRunModel.input_ref == _chief_run_input_ref(
+                    workflow=workflow,
+                    version=version,
+                ),
+            )
+            .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
+        )
+    )
+
+
+def _chief_run_generation(
+    session: Session,
+    *,
+    workflow: DecisionWorkflowModel,
+    version: int,
+) -> int:
+    return int(
+        session.scalar(
+            select(func.count())
+            .select_from(AgentRunModel)
+            .where(
+                AgentRunModel.organization_id == workflow.organization_id,
+                AgentRunModel.business_id == workflow.business_id,
+                AgentRunModel.input_ref == _chief_run_input_ref(
+                    workflow=workflow,
+                    version=version,
+                ),
+            )
+        )
+        or 0
+    )
+
+
+def _chief_run_input_ref(*, workflow: DecisionWorkflowModel, version: int) -> str:
+    return f"decision_workflow:{workflow.id}:chief:v{version}"
+
+
+def _chief_run_can_materialize(
+    session: Session,
+    *,
+    workflow: DecisionWorkflowModel,
+    run: AgentRunModel,
+) -> bool:
+    if run.status != AgentRunStatus.SUCCEEDED.value or run.output_data is None:
+        return False
+    try:
+        output = DecisionCandidate.model_validate(run.output_data)
+        if not output.selected_action.strip():
+            return False
+        _validate_evidence_refs(session, workflow=workflow, run=run, refs=output.evidence_refs)
+    except (PermanentJobError, ValidationError):
+        return False
+    return True
+
+
 def _materialize_candidate(
     session: Session,
     *,
@@ -872,10 +1028,10 @@ def _materialize_candidate(
     )
     if existing is not None:
         return existing
-    run = _agent_run_by_idempotency(
+    run = _chief_agent_run(
         session,
-        workflow,
-        f"decision_workflow:{workflow.id}:chief:v{version}",
+        workflow=workflow,
+        version=version,
     )
     if run.status != AgentRunStatus.SUCCEEDED.value or run.output_data is None:
         raise TransientJobError("chief run is not ready")
@@ -1708,6 +1864,22 @@ def _latest_candidate_or_none(
         .where(DecisionCandidateModel.workflow_id == workflow.id)
         .order_by(DecisionCandidateModel.version_number.desc())
         .limit(1)
+    )
+
+
+def _candidate_for_version(
+    session: Session,
+    *,
+    workflow: DecisionWorkflowModel,
+    version: int,
+) -> DecisionCandidateModel | None:
+    if version < 1:
+        return None
+    return session.scalar(
+        select(DecisionCandidateModel).where(
+            DecisionCandidateModel.workflow_id == workflow.id,
+            DecisionCandidateModel.version_number == version,
+        )
     )
 
 
