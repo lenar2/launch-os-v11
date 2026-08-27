@@ -13,6 +13,7 @@ from launch_os_v11.ai_runtime.adapters.fake import FakeAdapterScriptStep, FakeMo
 from launch_os_v11.ai_runtime.composition import fake_model_router
 from launch_os_v11.ai_runtime.contracts import (
     AgentAuthority,
+    AgentRunStatus,
     ModelCapability,
     ModelRequest,
     ModelResult,
@@ -356,6 +357,85 @@ def test_controller_display_aliases_materialize_as_canonical_types(engine) -> No
         session.close()
 
 
+def test_invalid_specialist_output_is_retried_without_materializing_bad_run(engine) -> None:
+    factory = create_session_factory(engine)
+    scope = _seed_business_graph_in_factory(factory, suffix="specialist-retry")
+    queue = ListJobQueue()
+    clock = FixedClock(_now())
+    workflow_id = _start_workflow_in_factory(factory, scope=scope, queue=queue, clock=clock)
+    snapshot_ref = _snapshot_provenance_ref(factory, workflow_id)
+    invalid_launch_payload = _specialist_payload("Launch Strategist", snapshot_ref)
+    facts_used = invalid_launch_payload["facts_used"]
+    assert isinstance(facts_used, list)
+    facts_used.append(
+        {
+            "statement": "Economics are not available in the retrieved lineage.",
+            "evidence_ref": snapshot_ref,
+            "epistemic_status": EpistemicStatus.UNKNOWN.value,
+        }
+    )
+    script = [
+        FakeAdapterScriptStep(
+            kind=ModelResultKind.PARSED,
+            payload=_specialist_payload("Audience Intelligence", snapshot_ref),
+        ),
+        FakeAdapterScriptStep(
+            kind=ModelResultKind.PARSED,
+            payload=_specialist_payload("Revenue/Funnel Strategist", snapshot_ref),
+        ),
+        FakeAdapterScriptStep(kind=ModelResultKind.PARSED, payload=invalid_launch_payload),
+        FakeAdapterScriptStep(
+            kind=ModelResultKind.PARSED,
+            payload=_specialist_payload("Launch Strategist", snapshot_ref),
+        ),
+        FakeAdapterScriptStep(
+            kind=ModelResultKind.PARSED,
+            payload=_candidate_payload(snapshot_ref, selected_action="Test concise offer copy"),
+        ),
+        *[
+            FakeAdapterScriptStep(
+                kind=ModelResultKind.PARSED,
+                payload=_controller_payload(
+                    contract_key.removeprefix("ai.controller."),
+                    snapshot_ref,
+                    verdict=ControllerVerdict.PASS,
+                ),
+            )
+            for contract_key in REQUIRED_CONTROLLER_CONTRACT_KEYS
+        ],
+    ]
+    worker = _phase3_worker(factory=factory, queue=queue, clock=clock, script=script)
+    _process_all(worker, queue)
+
+    session = factory()
+    try:
+        workflow = session.get(models.DecisionWorkflowModel, workflow_id)
+        assert workflow is not None
+        assert workflow.status == DecisionWorkflowStatus.AWAITING_DECISION_APPROVAL.value
+        launch_runs = session.scalars(
+            select(models.AgentRunModel)
+            .where(
+                models.AgentRunModel.input_ref
+                == f"decision_workflow:{workflow_id}:specialist:ai.specialist.launch_strategist"
+            )
+            .order_by(models.AgentRunModel.created_at)
+        ).all()
+        assert [run.status for run in launch_runs] == [
+            AgentRunStatus.INVALID_OUTPUT.value,
+            AgentRunStatus.SUCCEEDED.value,
+        ]
+        contribution = session.scalar(
+            select(models.SpecialistContributionModel).where(
+                models.SpecialistContributionModel.contract_key
+                == "ai.specialist.launch_strategist"
+            )
+        )
+        assert contribution is not None
+        assert contribution.agent_run_id == launch_runs[-1].id
+    finally:
+        session.close()
+
+
 def test_wrong_controller_identity_is_retried_without_materializing_bad_run(engine) -> None:
     factory = create_session_factory(engine)
     scope = _seed_business_graph_in_factory(factory, suffix="controller-mismatch")
@@ -586,18 +666,34 @@ def test_specialist_output_cannot_rewrite_manifest_epistemic_status(engine) -> N
     result = worker.process_one_from_queue()
 
     assert result is not None
-    assert result.status == "FAILED"
+    assert result.status == "SUCCEEDED"
     session = factory()
     try:
-        failed_job = session.get(models.JobModel, result.job_id)
-        assert failed_job is not None
-        assert failed_job.error_summary is not None
-        assert "evidence reference epistemic status mismatch" in failed_job.error_summary
+        workflow = session.get(models.DecisionWorkflowModel, workflow_id)
+        assert workflow is not None
+        assert workflow.status == DecisionWorkflowStatus.SPECIALISTS_RUNNING.value
         assert (
             session.scalar(select(func.count()).select_from(models.SpecialistContributionModel))
             == 0
         )
         assert session.scalar(select(func.count()).select_from(models.DecisionModel)) == 0
+        for contract_key in (
+            "ai.specialist.audience_intelligence",
+            "ai.specialist.revenue_funnel_strategist",
+            "ai.specialist.launch_strategist",
+        ):
+            runs = session.scalars(
+                select(models.AgentRunModel)
+                .where(
+                    models.AgentRunModel.input_ref
+                    == f"decision_workflow:{workflow_id}:specialist:{contract_key}"
+                )
+                .order_by(models.AgentRunModel.created_at)
+            ).all()
+            assert [run.status for run in runs] == [
+                AgentRunStatus.SUCCEEDED.value,
+                AgentRunStatus.QUEUED.value,
+            ]
     finally:
         session.close()
 

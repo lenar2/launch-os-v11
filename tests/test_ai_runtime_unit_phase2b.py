@@ -457,6 +457,22 @@ def test_openai_adapter_uses_responses_parse_without_tools_and_handles_outcomes(
     assert incomplete.kind == "INCOMPLETE"
     assert incomplete.incomplete_reason == "max_output_tokens"
 
+    validation_error: ValidationError | None = None
+    try:
+        RuntimeProbeOutput.model_validate({"message": "invalid", "confidence": 1.5})
+    except ValidationError as exc:
+        validation_error = exc
+    assert validation_error is not None
+    invalid = OpenAIResponsesAdapter(
+        api_key=None,
+        model_name="configured-openai-model",
+        client=FakeResponsesClient(error=validation_error),
+    ).invoke(request)
+    assert invalid.kind == ModelResultKind.INVALID_OUTPUT
+    assert invalid.parsed_output is None
+    assert invalid.invalid_output_reason
+    assert invalid.metadata.provider_name == "openai"
+
 
 def test_openai_adapter_classifies_provider_errors_without_secret_leakage() -> None:
     request = _model_request()

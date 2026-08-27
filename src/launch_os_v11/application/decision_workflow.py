@@ -109,6 +109,7 @@ _PENDING_AGENT_RUN_STATUSES = {
     AgentRunStatus.RUNNING.value,
     AgentRunStatus.RETRY_WAIT.value,
 }
+_MAX_SPECIALIST_OUTPUT_ATTEMPTS = 3
 _MAX_CONTROLLER_OUTPUT_ATTEMPTS = 3
 _CONTROLLER_TYPE_ALIASES = {
     "evidence": frozenset({"evidence", "evidencecontroller", "evidencecontrollerreview"}),
@@ -440,6 +441,23 @@ def _advance_workflow(
         )
         return
     if status == DecisionWorkflowStatus.SPECIALISTS_RUNNING:
+        not_ready_specialist_runs = _ensure_specialist_runs(
+            session,
+            workflow=workflow,
+            queue=queue,
+            clock=clock,
+            registry=registry,
+        )
+        if not_ready_specialist_runs:
+            generation = _specialist_run_generation(session, workflow)
+            _enqueue_workflow_advance(
+                session,
+                workflow=workflow,
+                queue=queue,
+                clock=clock,
+                suffix=f"after-specialists:specialist-output-retry:{generation}",
+            )
+            return
         _materialize_specialist_contributions(session, workflow=workflow)
         workflow.status = DecisionWorkflowStatus.SPECIALISTS_READY.value
         _ensure_chief_run(session, workflow=workflow, queue=queue, clock=clock, registry=registry)
@@ -543,16 +561,28 @@ def _ensure_specialist_runs(
     queue: JobQueue,
     clock: Clock,
     registry: AgentRegistry,
-) -> None:
+) -> int:
     service = AgentRunService(registry=registry, queue=queue, clock=clock)
     scope = TenantScope(organization_id=workflow.organization_id, business_id=workflow.business_id)
+    not_ready_count = 0
     for contract_key in SPECIALIST_CONTRACT_KEYS:
+        run_state = _specialist_run_state(
+            session,
+            workflow=workflow,
+            contract_key=contract_key,
+        )
+        if run_state == "ready":
+            continue
+        not_ready_count += 1
+        if run_state == "pending":
+            continue
+        input_ref = _specialist_run_input_ref(workflow=workflow, contract_key=contract_key)
         service.create_agent_run(
             session,
             scope=scope,
             contract_key=contract_key,
             contract_version=1,
-            input_ref=f"decision_workflow:{workflow.id}:specialist:{contract_key}",
+            input_ref=input_ref,
             context_refs=(
                 ContextReference(
                     object_type="business_snapshot",
@@ -562,8 +592,13 @@ def _ensure_specialist_runs(
             correlation_id=workflow.correlation_id,
             causation_id=workflow.id,
             job_type=JOB_TYPE_AI_RUN_AGENT,
-            idempotency_key=f"decision_workflow:{workflow.id}:specialist:{contract_key}",
+            idempotency_key=_next_specialist_run_idempotency_key(
+                session,
+                workflow=workflow,
+                contract_key=contract_key,
+            ),
         )
+    return not_ready_count
 
 
 def _ensure_chief_run(
@@ -676,10 +711,10 @@ def _materialize_specialist_contributions(
         existing = _specialist_contribution(session, workflow=workflow, contract_key=contract_key)
         if existing is not None:
             continue
-        run = _agent_run_by_idempotency(
+        run = _specialist_agent_run(
             session,
-            workflow,
-            f"decision_workflow:{workflow.id}:specialist:{contract_key}",
+            workflow=workflow,
+            contract_key=contract_key,
         )
         if run.status != AgentRunStatus.SUCCEEDED.value or run.output_data is None:
             raise TransientJobError(f"specialist run is not ready: {contract_key}")
@@ -711,6 +746,116 @@ def _materialize_specialist_contributions(
         )
         session.add(row)
         session.flush()
+
+
+def _next_specialist_run_idempotency_key(
+    session: Session,
+    *,
+    workflow: DecisionWorkflowModel,
+    contract_key: str,
+) -> str:
+    runs = _specialist_agent_runs(session, workflow=workflow, contract_key=contract_key)
+    base_key = _specialist_run_input_ref(workflow=workflow, contract_key=contract_key)
+    if not runs:
+        return base_key
+    return f"{base_key}:retry:{len(runs) + 1}"
+
+
+def _specialist_run_state(
+    session: Session,
+    *,
+    workflow: DecisionWorkflowModel,
+    contract_key: str,
+) -> str:
+    runs = _specialist_agent_runs(session, workflow=workflow, contract_key=contract_key)
+    if any(run.status in _PENDING_AGENT_RUN_STATUSES for run in runs):
+        return "pending"
+    if any(
+        _specialist_run_can_materialize(session, workflow=workflow, run=run)
+        for run in runs
+    ):
+        return "ready"
+    if len(runs) >= _MAX_SPECIALIST_OUTPUT_ATTEMPTS:
+        raise PermanentJobError("SpecialistContribution output retry limit exceeded")
+    return "create"
+
+
+def _specialist_agent_run(
+    session: Session,
+    *,
+    workflow: DecisionWorkflowModel,
+    contract_key: str,
+) -> AgentRunModel:
+    runs = _specialist_agent_runs(session, workflow=workflow, contract_key=contract_key)
+    for run in runs:
+        if _specialist_run_can_materialize(session, workflow=workflow, run=run):
+            return run
+    if any(run.status in _PENDING_AGENT_RUN_STATUSES for run in runs):
+        raise TransientJobError(f"specialist run is not ready: {contract_key}")
+    if len(runs) >= _MAX_SPECIALIST_OUTPUT_ATTEMPTS:
+        raise PermanentJobError("SpecialistContribution output retry limit exceeded")
+    raise TransientJobError(f"specialist run is not ready: {contract_key}")
+
+
+def _specialist_agent_runs(
+    session: Session,
+    *,
+    workflow: DecisionWorkflowModel,
+    contract_key: str,
+) -> tuple[AgentRunModel, ...]:
+    return tuple(
+        session.scalars(
+            select(AgentRunModel)
+            .where(
+                AgentRunModel.organization_id == workflow.organization_id,
+                AgentRunModel.business_id == workflow.business_id,
+                AgentRunModel.agent_contract_key == contract_key,
+                AgentRunModel.agent_contract_version == 1,
+                AgentRunModel.input_ref
+                == _specialist_run_input_ref(workflow=workflow, contract_key=contract_key),
+            )
+            .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
+        )
+    )
+
+
+def _specialist_run_generation(session: Session, workflow: DecisionWorkflowModel) -> int:
+    input_refs = [
+        _specialist_run_input_ref(workflow=workflow, contract_key=contract_key)
+        for contract_key in SPECIALIST_CONTRACT_KEYS
+    ]
+    return int(
+        session.scalar(
+            select(func.count())
+            .select_from(AgentRunModel)
+            .where(
+                AgentRunModel.organization_id == workflow.organization_id,
+                AgentRunModel.business_id == workflow.business_id,
+                AgentRunModel.input_ref.in_(input_refs),
+            )
+        )
+        or 0
+    )
+
+
+def _specialist_run_input_ref(*, workflow: DecisionWorkflowModel, contract_key: str) -> str:
+    return f"decision_workflow:{workflow.id}:specialist:{contract_key}"
+
+
+def _specialist_run_can_materialize(
+    session: Session,
+    *,
+    workflow: DecisionWorkflowModel,
+    run: AgentRunModel,
+) -> bool:
+    if run.status != AgentRunStatus.SUCCEEDED.value or run.output_data is None:
+        return False
+    try:
+        output = SpecialistContribution.model_validate(run.output_data)
+        _validate_evidence_refs(session, workflow=workflow, run=run, refs=output.evidence_refs)
+    except (PermanentJobError, ValidationError):
+        return False
+    return True
 
 
 def _materialize_candidate(

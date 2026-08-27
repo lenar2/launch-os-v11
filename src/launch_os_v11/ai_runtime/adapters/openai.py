@@ -12,6 +12,7 @@ from openai import (
     OpenAI,
     RateLimitError,
 )
+from pydantic import ValidationError
 
 from launch_os_v11.ai_runtime.contracts import (
     ModelRequest,
@@ -66,6 +67,25 @@ class OpenAIResponsesAdapter:
             raise AIPermanentProviderError(_safe_error(exc)) from exc
         except APIError as exc:
             raise AIPermanentProviderError(_safe_error(exc)) from exc
+        except ValidationError as exc:
+            completed_at = datetime.now(tz=UTC)
+            metadata = ProviderMetadata(
+                provider_name=self.provider_name,
+                model_name=request.selected_model_name,
+                response_id=None,
+                token_usage={},
+                latency_ms=int((perf_counter() - start_monotonic) * 1000),
+                started_at=started_at,
+                completed_at=completed_at,
+            )
+            return ModelResult(
+                kind=ModelResultKind.INVALID_OUTPUT,
+                parsed_output=None,
+                refusal=None,
+                incomplete_reason=None,
+                invalid_output_reason=exc.errors()[0]["msg"],
+                metadata=metadata,
+            )
 
         completed_at = datetime.now(tz=UTC)
         metadata = ProviderMetadata(
