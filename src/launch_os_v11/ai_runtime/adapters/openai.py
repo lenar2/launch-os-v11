@@ -5,12 +5,14 @@ from time import perf_counter
 from typing import Any
 
 from openai import (
+    DEFAULT_TIMEOUT,
     APIConnectionError,
     APIError,
     APIStatusError,
     APITimeoutError,
     OpenAI,
     RateLimitError,
+    Timeout,
 )
 from pydantic import ValidationError
 
@@ -36,12 +38,24 @@ class OpenAIResponsesAdapter:
         *,
         api_key: str | None,
         model_name: str,
+        connect_timeout_seconds: float = 20.0,
         client: Any | None = None,
     ) -> None:
         if client is None and not api_key:
             raise AIConfigurationError("OpenAI adapter requires OPENAI_API_KEY")
+        if connect_timeout_seconds <= 0:
+            raise AIConfigurationError("OpenAI connect timeout must be positive")
         self.model_name = model_name
-        self._client = client or OpenAI(api_key=api_key, max_retries=0)
+        self._client = client or OpenAI(
+            api_key=api_key,
+            max_retries=0,
+            timeout=Timeout(
+                connect=connect_timeout_seconds,
+                read=DEFAULT_TIMEOUT.read,
+                write=DEFAULT_TIMEOUT.write,
+                pool=DEFAULT_TIMEOUT.pool,
+            ),
+        )
 
     def invoke(self, request: ModelRequest[OutputModelT]) -> ModelResult[OutputModelT]:
         started_at = datetime.now(tz=UTC)

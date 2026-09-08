@@ -46,7 +46,11 @@ def model_router_from_settings(settings: Settings) -> ModelRouter:
     api_key = _secret_value(settings.openai_api_key)
     from launch_os_v11.ai_runtime.adapters.openai import OpenAIResponsesAdapter
 
-    adapter = OpenAIResponsesAdapter(api_key=api_key, model_name=model_name)
+    adapter = OpenAIResponsesAdapter(
+        api_key=api_key,
+        model_name=model_name,
+        connect_timeout_seconds=settings.ai_openai_connect_timeout_seconds,
+    )
     return ModelRouter(
         routes={
             ModelCapability.DEEP_REASONING: ModelRoute(

@@ -80,6 +80,11 @@ EXPECTED_TABLES = {
     "audit_logs",
     "feature_flags",
     "learnings",
+    "outcome_ingestion_contracts",
+    "outcome_metric_definitions",
+    "outcome_metric_versions",
+    "outcome_economic_links",
+    "outcome_experiment_proposals",
     "alembic_version",
 }
 
@@ -127,6 +132,11 @@ TENANT_SCOPED_TABLES = {
     "audit_logs",
     "feature_flags",
     "learnings",
+    "outcome_ingestion_contracts",
+    "outcome_metric_definitions",
+    "outcome_metric_versions",
+    "outcome_economic_links",
+    "outcome_experiment_proposals",
 }
 
 EXPECTED_FOREIGN_KEYS: set[ForeignKeyPair] = (
@@ -187,6 +197,63 @@ EXPECTED_FOREIGN_KEYS: set[ForeignKeyPair] = (
         ("specialist_contributions", "workflow_id", "decision_workflows", "id"),
         ("learnings", "decision_id", "decisions", "id"),
         ("learnings", "experiment_id", "experiments", "id"),
+        (
+            "outcome_ingestion_contracts",
+            "provenance_source_record_id",
+            "source_records",
+            "id",
+        ),
+        (
+            "outcome_metric_definitions",
+            "ingestion_contract_id",
+            "outcome_ingestion_contracts",
+            "id",
+        ),
+        (
+            "outcome_metric_definitions",
+            "provenance_source_record_id",
+            "source_records",
+            "id",
+        ),
+        (
+            "outcome_metric_versions",
+            "metric_definition_id",
+            "outcome_metric_definitions",
+            "id",
+        ),
+        (
+            "outcome_metric_versions",
+            "corrects_metric_version_id",
+            "outcome_metric_versions",
+            "id",
+        ),
+        ("outcome_metric_versions", "evidence_id", "evidence", "id"),
+        (
+            "outcome_economic_links",
+            "metric_version_id",
+            "outcome_metric_versions",
+            "id",
+        ),
+        ("outcome_economic_links", "evidence_id", "evidence", "id"),
+        (
+            "outcome_experiment_proposals",
+            "metric_definition_id",
+            "outcome_metric_definitions",
+            "id",
+        ),
+        (
+            "outcome_experiment_proposals",
+            "metric_version_id",
+            "outcome_metric_versions",
+            "id",
+        ),
+        (
+            "outcome_experiment_proposals",
+            "economic_link_id",
+            "outcome_economic_links",
+            "id",
+        ),
+        ("outcome_experiment_proposals", "learning_id", "learnings", "id"),
     }
 )
 
@@ -301,6 +368,71 @@ def _assert_schema_contract(database_url: str) -> None:
             for constraint in inspector.get_unique_constraints("decision_approvals")
         }
         assert ("decision_id", "action_type", "object_version_id") in approval_uniques
+
+        outcome_contract_uniques = {
+            tuple(constraint["column_names"])
+            for constraint in inspector.get_unique_constraints("outcome_ingestion_contracts")
+        }
+        assert (
+            "business_id",
+            "provider",
+            "contract_key",
+            "payload_schema_version",
+        ) in outcome_contract_uniques
+        outcome_contract_checks = {
+            constraint["name"]
+            for constraint in inspector.get_check_constraints("outcome_ingestion_contracts")
+        }
+        assert "ck_outcome_ingestion_contract_schema_version_positive" in outcome_contract_checks
+        assert "ck_outcome_ingestion_contract_status" in outcome_contract_checks
+
+        outcome_definition_uniques = {
+            tuple(constraint["column_names"])
+            for constraint in inspector.get_unique_constraints("outcome_metric_definitions")
+        }
+        assert ("business_id", "metric_key", "definition_version") in outcome_definition_uniques
+        outcome_definition_checks = {
+            constraint["name"]
+            for constraint in inspector.get_check_constraints("outcome_metric_definitions")
+        }
+        assert "ck_outcome_metric_definition_aggregation" in outcome_definition_checks
+        assert "ck_outcome_metric_definition_data_availability" in outcome_definition_checks
+
+        outcome_version_uniques = {
+            tuple(constraint["column_names"])
+            for constraint in inspector.get_unique_constraints("outcome_metric_versions")
+        }
+        assert (
+            "metric_definition_id",
+            "subject_type",
+            "subject_id",
+            "version_number",
+        ) in outcome_version_uniques
+        assert ("derivation_hash",) in outcome_version_uniques
+        outcome_version_indexes = {
+            index["name"] for index in inspector.get_indexes("outcome_metric_versions")
+        }
+        assert "ix_outcome_metric_versions_derivation_hash" in outcome_version_indexes
+        outcome_version_checks = {
+            constraint["name"]
+            for constraint in inspector.get_check_constraints("outcome_metric_versions")
+        }
+        assert "ck_outcome_metric_version_synthetic_non_live" in outcome_version_checks
+
+        outcome_economic_uniques = {
+            tuple(constraint["column_names"])
+            for constraint in inspector.get_unique_constraints("outcome_economic_links")
+        }
+        assert ("metric_version_id", "version_number") in outcome_economic_uniques
+        outcome_economic_checks = {
+            constraint["name"]
+            for constraint in inspector.get_check_constraints("outcome_economic_links")
+        }
+        assert "ck_outcome_economic_link_hurdle_positive" in outcome_economic_checks
+        assert "ck_outcome_economic_link_benefit_nonnegative" in outcome_economic_checks
+        assert "ck_outcome_economic_link_epistemic_status" in outcome_economic_checks
+        assert "ck_outcome_economic_link_disabled_no_go" in outcome_economic_checks
+        assert "ck_outcome_economic_link_synthetic_non_live" in outcome_economic_checks
     finally:
         engine.dispose()
 

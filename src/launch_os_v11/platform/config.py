@@ -38,6 +38,12 @@ class Settings(BaseSettings):
         default=None,
         alias="LAUNCH_OS_AI_OPENAI_TEXT_MODEL",
     )
+    ai_openai_connect_timeout_seconds: float = Field(
+        default=20.0,
+        gt=0,
+        le=120,
+        alias="LAUNCH_OS_AI_OPENAI_CONNECT_TIMEOUT_SECONDS",
+    )
     openai_api_key: SecretStr | None = Field(default=None, alias="OPENAI_API_KEY")
     telegram_bot_token: SecretStr | None = Field(
         default=None,

@@ -16,6 +16,10 @@ from launch_os_v11.domain.enums import (
     JobStatus,
     LaunchPhaseStatus,
     OutboxStatus,
+    OutcomeDataAvailability,
+    OutcomeEconomicLinkType,
+    OutcomeInstrumentationStatus,
+    OutcomeMetricAggregation,
     PermissionMode,
     PublicationStatus,
     SourceTrust,
@@ -24,6 +28,7 @@ from launch_os_v11.domain.exceptions import TenantScopeViolation
 from launch_os_v11.domain.scope import TenantScope
 from launch_os_v11.domain.time import utc_now
 from launch_os_v11.persistence import models
+from launch_os_v11.persistence import repositories as repository_module
 from launch_os_v11.persistence.repositories import (
     AppendOnlyScopedRepository,
     ScopedRepository,
@@ -166,6 +171,16 @@ def _seed_dependencies(session: Session, scope: TenantScope, suffix: str) -> dic
         payload={},
         ingested_at=now,
     )
+    evidence = models.EvidenceModel(
+        id=f"dep-evidence-{suffix}",
+        organization_id=scope.organization_id,
+        business_id=scope.business_id,
+        source_record_id=source.id,
+        statement="Evidence",
+        status=EpistemicStatus.OBSERVATION.value,
+        recorded_at=now,
+        conflicts_with_evidence_ids=[],
+    )
     snapshot = models.BusinessSnapshotModel(
         id=f"dep-snapshot-{suffix}",
         organization_id=scope.organization_id,
@@ -279,6 +294,15 @@ def _seed_dependencies(session: Session, scope: TenantScope, suffix: str) -> dic
         status=ApprovalStatus.APPROVED.value,
         created_at=now,
     )
+    job = models.JobModel(
+        id=f"dep-job-{suffix}",
+        organization_id=scope.organization_id,
+        business_id=scope.business_id,
+        job_type="noop",
+        status=JobStatus.QUEUED.value,
+        payload={},
+        idempotency_key=f"dep-job-key-{suffix}",
+    )
     agent_definition = _agent_definition_model(scope, suffix=suffix, prefix="dep")
     specialist_agent_run = _agent_run_model(
         scope,
@@ -328,6 +352,111 @@ def _seed_dependencies(session: Session, scope: TenantScope, suffix: str) -> dic
         context_manifest={},
         created_at=now,
     )
+    decision_approval = models.DecisionApprovalModel(
+        id=f"dep-decision-approval-{suffix}",
+        organization_id=scope.organization_id,
+        business_id=scope.business_id,
+        workflow_id=workflow.id,
+        decision_id=decision.id,
+        candidate_id=approval_candidate.id,
+        action_type="dep_internal_preparation",
+        object_type="DecisionCandidate",
+        object_id=approval_candidate.id,
+        object_version_id=approval_candidate.id,
+        object_version=approval_candidate.version_number,
+        approved_by_user_id=user.id,
+        status=ApprovalStatus.APPROVED.value,
+        created_at=now,
+    )
+    learning = models.LearningModel(
+        id=f"dep-learning-{suffix}",
+        organization_id=scope.organization_id,
+        business_id=scope.business_id,
+        decision_id=decision.id,
+        experiment_id=experiment.id,
+        statement="Learning",
+        evidence_ids=[evidence.id],
+        causality_class=CausalityClass.UNKNOWN.value,
+    )
+    outcome_contract = models.OutcomeIngestionContractModel(
+        id=f"dep-outcome-contract-{suffix}",
+        organization_id=scope.organization_id,
+        business_id=scope.business_id,
+        provider="synthetic",
+        contract_key=f"qualified-intent-{suffix}",
+        payload_schema_version=1,
+        outcome_class="QUALIFIED_INTENT",
+        canonical_event_type="outcome.qualified_intent",
+        identity_boundary="synthetic subject only",
+        pii_classification="none",
+        retention_class="test",
+        status=OutcomeInstrumentationStatus.DISABLED_NON_LIVE.value,
+        schema={"type": "object"},
+        provenance_source_record_id=source.id,
+    )
+    outcome_definition = models.OutcomeMetricDefinitionModel(
+        id=f"dep-outcome-definition-{suffix}",
+        organization_id=scope.organization_id,
+        business_id=scope.business_id,
+        metric_key=f"qualified_intent_rate_{suffix}",
+        definition_version=1,
+        outcome_class="QUALIFIED_INTENT",
+        numerator_event_type="outcome.qualified_intent",
+        denominator_event_type="outcome.eligible_exposure",
+        aggregation=OutcomeMetricAggregation.RATE.value,
+        eligible_population="Synthetic eligible subject",
+        denominator_description="Synthetic eligible exposure",
+        observation_window_seconds=3600,
+        attribution_method="deterministic_same_subject_window",
+        attribution_limitations=["synthetic fixture only"],
+        data_availability=OutcomeDataAvailability.AVAILABLE.value,
+        downstream_economic_meaning="Qualified intent can be linked to downstream value.",
+        status=OutcomeInstrumentationStatus.DISABLED_NON_LIVE.value,
+        ingestion_contract_id=outcome_contract.id,
+        provenance_source_record_id=source.id,
+    )
+    outcome_metric_version = models.OutcomeMetricVersionModel(
+        id=f"dep-outcome-metric-version-{suffix}",
+        organization_id=scope.organization_id,
+        business_id=scope.business_id,
+        metric_definition_id=outcome_definition.id,
+        version_number=1,
+        subject_type="SyntheticExperiment",
+        subject_id=f"subject-{suffix}",
+        value_numeric=1.0,
+        numerator_count=1,
+        denominator_count=1,
+        availability_status=OutcomeDataAvailability.AVAILABLE.value,
+        coverage_status="COMPLETE",
+        source_window_start=now,
+        source_window_end=now,
+        included_business_event_ids=[],
+        excluded_event_rule_version="test.rule.v1",
+        calculation_version="test.calc.v1",
+        calculated_at=now,
+        derivation_hash=f"{suffix}".encode().hex().ljust(64, "0")[:64],
+        evidence_id=evidence.id,
+    )
+    outcome_economic_link = models.OutcomeEconomicLinkModel(
+        id=f"dep-outcome-economic-link-{suffix}",
+        organization_id=scope.organization_id,
+        business_id=scope.business_id,
+        metric_version_id=outcome_metric_version.id,
+        version_number=1,
+        link_type=OutcomeEconomicLinkType.VALUE_PROXY.value,
+        downstream_outcome_class="QUALIFIED_INTENT",
+        epistemic_status=EpistemicStatus.HYPOTHESIS.value,
+        value_per_unit_cents=1000,
+        direct_cost_cents=0,
+        fully_loaded_execution_cost_cents=100,
+        opportunity_cost_cents=100,
+        bounded_downside_cents=200,
+        expected_benefit_cents=600,
+        hurdle_multiplier=3,
+        supports_go=False,
+        evidence_id=evidence.id,
+        limitations=["synthetic fixture only"],
+    )
     session.add_all(
         [
             user,
@@ -338,6 +467,7 @@ def _seed_dependencies(session: Session, scope: TenantScope, suffix: str) -> dic
             offer,
             channel,
             source,
+            evidence,
             snapshot,
             campaign,
             launch,
@@ -349,12 +479,19 @@ def _seed_dependencies(session: Session, scope: TenantScope, suffix: str) -> dic
             asset_version,
             action,
             approval,
+            job,
             agent_definition,
             specialist_agent_run,
             chief_agent_run,
             approval_chief_agent_run,
             workflow,
             approval_candidate,
+            decision_approval,
+            learning,
+            outcome_contract,
+            outcome_definition,
+            outcome_metric_version,
+            outcome_economic_link,
         ]
     )
     session.flush()
@@ -365,6 +502,7 @@ def _seed_dependencies(session: Session, scope: TenantScope, suffix: str) -> dic
         "offer": offer.id,
         "channel": channel.id,
         "source": source.id,
+        "evidence": evidence.id,
         "snapshot": snapshot.id,
         "campaign": campaign.id,
         "launch": launch.id,
@@ -376,11 +514,18 @@ def _seed_dependencies(session: Session, scope: TenantScope, suffix: str) -> dic
         "asset_version": asset_version.id,
         "action": action.id,
         "approval": approval.id,
+        "job": job.id,
         "agent_definition": agent_definition.id,
         "specialist_agent_run": specialist_agent_run.id,
         "chief_agent_run": chief_agent_run.id,
         "workflow": workflow.id,
         "approval_candidate": approval_candidate.id,
+        "decision_approval": decision_approval.id,
+        "learning": learning.id,
+        "outcome_contract": outcome_contract.id,
+        "outcome_definition": outcome_definition.id,
+        "outcome_metric_version": outcome_metric_version.id,
+        "outcome_economic_link": outcome_economic_link.id,
     }
 
 
@@ -957,7 +1102,176 @@ def _row_factories() -> list[tuple[type[Any], RowFactory, bool]]:
             ),
             True,
         ),
+        (
+            models.OutcomeIngestionContractModel,
+            lambda scope, suffix, dep: models.OutcomeIngestionContractModel(
+                id=f"row-outcome-contract-{suffix}",
+                organization_id=scope.organization_id,
+                business_id=scope.business_id,
+                provider="synthetic",
+                contract_key=f"row-qualified-intent-{suffix}",
+                payload_schema_version=1,
+                outcome_class="QUALIFIED_INTENT",
+                canonical_event_type="outcome.qualified_intent",
+                identity_boundary="synthetic subject only",
+                pii_classification="none",
+                retention_class="test",
+                status=OutcomeInstrumentationStatus.DISABLED_NON_LIVE.value,
+                schema={"type": "object"},
+                provenance_source_record_id=dep["source"],
+            ),
+            True,
+        ),
+        (
+            models.OutcomeMetricDefinitionModel,
+            lambda scope, suffix, dep: models.OutcomeMetricDefinitionModel(
+                id=f"row-outcome-definition-{suffix}",
+                organization_id=scope.organization_id,
+                business_id=scope.business_id,
+                metric_key=f"row_qualified_intent_rate_{suffix}",
+                definition_version=1,
+                outcome_class="QUALIFIED_INTENT",
+                numerator_event_type="outcome.qualified_intent",
+                denominator_event_type="outcome.eligible_exposure",
+                aggregation=OutcomeMetricAggregation.RATE.value,
+                eligible_population="Synthetic eligible subject",
+                denominator_description="Synthetic eligible exposure",
+                observation_window_seconds=3600,
+                attribution_method="deterministic_same_subject_window",
+                attribution_limitations=["synthetic fixture only"],
+                data_availability=OutcomeDataAvailability.AVAILABLE.value,
+                downstream_economic_meaning="Qualified intent can be linked to value.",
+                status=OutcomeInstrumentationStatus.DISABLED_NON_LIVE.value,
+                ingestion_contract_id=dep["outcome_contract"],
+                provenance_source_record_id=dep["source"],
+            ),
+            True,
+        ),
+        (
+            models.OutcomeMetricVersionModel,
+            lambda scope, suffix, dep: models.OutcomeMetricVersionModel(
+                id=f"row-outcome-metric-version-{suffix}",
+                organization_id=scope.organization_id,
+                business_id=scope.business_id,
+                metric_definition_id=dep["outcome_definition"],
+                version_number=2,
+                subject_type="SyntheticExperiment",
+                subject_id=f"row-subject-{suffix}",
+                value_numeric=0.5,
+                numerator_count=1,
+                denominator_count=2,
+                availability_status=OutcomeDataAvailability.AVAILABLE.value,
+                coverage_status="COMPLETE",
+                source_window_start=now,
+                source_window_end=now,
+                included_business_event_ids=[],
+                excluded_event_rule_version="test.rule.v1",
+                calculation_version="test.calc.v1",
+                calculated_at=now,
+                corrects_metric_version_id=dep["outcome_metric_version"],
+                derivation_hash=f"row-{suffix}".encode().hex().ljust(64, "0")[:64],
+                evidence_id=dep["evidence"],
+            ),
+            False,
+        ),
+        (
+            models.OutcomeEconomicLinkModel,
+            lambda scope, suffix, dep: models.OutcomeEconomicLinkModel(
+                id=f"row-outcome-economic-link-{suffix}",
+                organization_id=scope.organization_id,
+                business_id=scope.business_id,
+                metric_version_id=dep["outcome_metric_version"],
+                version_number=2,
+                link_type=OutcomeEconomicLinkType.VALUE_PROXY.value,
+                downstream_outcome_class="QUALIFIED_INTENT",
+                epistemic_status=EpistemicStatus.HYPOTHESIS.value,
+                value_per_unit_cents=1000,
+                direct_cost_cents=0,
+                fully_loaded_execution_cost_cents=100,
+                opportunity_cost_cents=100,
+                bounded_downside_cents=200,
+                expected_benefit_cents=600,
+                hurdle_multiplier=3,
+                supports_go=False,
+                evidence_id=dep["evidence"],
+                limitations=["synthetic fixture only"],
+            ),
+            False,
+        ),
+        (
+            models.OutcomeExperimentProposalModel,
+            lambda scope, suffix, dep: models.OutcomeExperimentProposalModel(
+                id=f"row-outcome-proposal-{suffix}",
+                organization_id=scope.organization_id,
+                business_id=scope.business_id,
+                metric_definition_id=dep["outcome_definition"],
+                metric_version_id=dep["outcome_metric_version"],
+                economic_link_id=dep["outcome_economic_link"],
+                learning_id=dep["learning"],
+                status=OutcomeInstrumentationStatus.DISABLED_NON_LIVE.value,
+                hypothesis="Synthetic qualified intent can support downstream decisions.",
+                selected_metric_key=f"row_qualified_intent_rate_{suffix}",
+                eligible_population="Synthetic eligible subject",
+                treatment="Synthetic treatment",
+                control="Synthetic control",
+                success_threshold=">=0.30",
+                weak_signal_threshold=">=0.10",
+                failure_threshold="<0.10",
+                evidence_ids=[dep["evidence"]],
+                limitations=["synthetic fixture only"],
+                payload={"non_live": True, "external_execution_authorized": False},
+            ),
+            False,
+        ),
     ]
+
+
+REFERENCE_DEPENDENCY_KEYS: dict[type[Any], str] = {
+    models.UserModel: "user",
+    models.ProductModel: "product",
+    models.SourceRecordModel: "source",
+    models.CampaignModel: "campaign",
+    models.OfferModel: "offer",
+    models.GoalModel: "goal",
+    models.ChannelModel: "channel",
+    models.BusinessSnapshotModel: "snapshot",
+    models.DecisionModel: "decision",
+    models.DecisionCandidateModel: "approval_candidate",
+    models.DecisionApprovalModel: "decision_approval",
+    models.AgentRunModel: "specialist_agent_run",
+    models.ExperimentModel: "experiment",
+    models.HypothesisModel: "hypothesis",
+    models.CreativeBriefModel: "brief",
+    models.AssetModel: "asset",
+    models.AssetVersionModel: "asset_version",
+    models.ActionModel: "action",
+    models.ApprovalModel: "approval",
+    models.JobModel: "job",
+    models.AgentDefinitionModel: "agent_definition",
+    models.OutcomeIngestionContractModel: "outcome_contract",
+    models.OutcomeMetricDefinitionModel: "outcome_definition",
+    models.OutcomeMetricVersionModel: "outcome_metric_version",
+    models.OutcomeEconomicLinkModel: "outcome_economic_link",
+    models.LearningModel: "learning",
+}
+
+
+def _reference_policy_cases() -> list[tuple[type[Any], RowFactory, bool, str, str]]:
+    factories = {
+        model_type: (factory, mutable)
+        for model_type, factory, mutable in _row_factories()
+    }
+    cases: list[tuple[type[Any], RowFactory, bool, str, str]] = []
+    for model_type, references in repository_module._REFERENCE_POLICY.items():
+        if model_type not in factories:
+            continue
+        factory, mutable = factories[model_type]
+        for field_name, referenced_model in references:
+            dependency_key = REFERENCE_DEPENDENCY_KEYS.get(referenced_model)
+            if dependency_key is None:
+                continue
+            cases.append((model_type, factory, mutable, field_name, dependency_key))
+    return cases
 
 
 @pytest.mark.parametrize(("model_type", "factory", "mutable"), _row_factories())
@@ -992,6 +1306,33 @@ def test_business_scoped_repository_contracts_for_all_models(
     else:
         assert not hasattr(repo_a, "update_fields")
         assert not hasattr(repo_a, "delete")
+
+
+@pytest.mark.parametrize(
+    ("model_type", "factory", "mutable", "field_name", "dependency_key"),
+    _reference_policy_cases(),
+)
+def test_repository_reference_policy_rejects_each_cross_business_reference(
+    session: Session,
+    model_type: type[Any],
+    factory: RowFactory,
+    mutable: bool,
+    field_name: str,
+    dependency_key: str,
+) -> None:
+    scope_a = TenantScope("org-ref-policy-a", "biz-ref-policy-a")
+    scope_b = TenantScope("org-ref-policy-b", "biz-ref-policy-b")
+    dependencies_a = _seed_dependencies(session, scope_a, "policy-a")
+    dependencies_b = _seed_dependencies(session, scope_b, "policy-b")
+    session.commit()
+
+    repository_class = ScopedRepository if mutable else AppendOnlyScopedRepository
+    repo_a = repository_class(session, scope_a, model_type)
+    row = factory(scope_a, f"policy-{model_type.__name__}-{field_name}", dependencies_a)
+    setattr(row, field_name, dependencies_b[dependency_key])
+
+    with pytest.raises(TenantScopeViolation):
+        repo_a.add(row)
 
 
 def test_repository_rejects_reference_to_object_in_another_business(session: Session) -> None:

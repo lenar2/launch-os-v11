@@ -113,6 +113,15 @@ ApprovalRepository = AppendOnlyScopedRepository[models.ApprovalModel]
 BusinessEventRepository = AppendOnlyScopedRepository[models.BusinessEventModel]
 AuditLogRepository = AppendOnlyScopedRepository[models.AuditLogModel]
 OutboxEventRepository = AppendOnlyScopedRepository[models.OutboxEventModel]
+OutcomeMetricVersionRepository = AppendOnlyScopedRepository[
+    models.OutcomeMetricVersionModel
+]
+OutcomeEconomicLinkRepository = AppendOnlyScopedRepository[
+    models.OutcomeEconomicLinkModel
+]
+OutcomeExperimentProposalRepository = AppendOnlyScopedRepository[
+    models.OutcomeExperimentProposalModel
+]
 
 
 def _is_reference_visible(
@@ -220,5 +229,27 @@ _REFERENCE_POLICY: dict[type[object], tuple[tuple[str, type[Any]], ...]] = {
     models.LearningModel: (
         ("decision_id", models.DecisionModel),
         ("experiment_id", models.ExperimentModel),
+    ),
+    models.OutcomeIngestionContractModel: (
+        ("provenance_source_record_id", models.SourceRecordModel),
+    ),
+    models.OutcomeMetricDefinitionModel: (
+        ("ingestion_contract_id", models.OutcomeIngestionContractModel),
+        ("provenance_source_record_id", models.SourceRecordModel),
+    ),
+    models.OutcomeMetricVersionModel: (
+        ("metric_definition_id", models.OutcomeMetricDefinitionModel),
+        ("corrects_metric_version_id", models.OutcomeMetricVersionModel),
+        ("evidence_id", models.EvidenceModel),
+    ),
+    models.OutcomeEconomicLinkModel: (
+        ("metric_version_id", models.OutcomeMetricVersionModel),
+        ("evidence_id", models.EvidenceModel),
+    ),
+    models.OutcomeExperimentProposalModel: (
+        ("metric_definition_id", models.OutcomeMetricDefinitionModel),
+        ("metric_version_id", models.OutcomeMetricVersionModel),
+        ("economic_link_id", models.OutcomeEconomicLinkModel),
+        ("learning_id", models.LearningModel),
     ),
 }
