@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from launch_os_v11.analytics.business_outcomes import (
+    RESERVED_OUTCOME_PAYLOAD_FIELDS,
     calculate_outcome_metric_version,
     create_outcome_economic_link,
     create_outcome_experiment_proposal,
@@ -36,7 +37,7 @@ from launch_os_v11.runtime.clock import FixedClock
 from launch_os_v11.runtime.errors import PermanentJobError, SecretRejectedError
 
 SUBJECT_TYPE = "SyntheticExperiment"
-SUBJECT_ID = "business-outcome-fixture"
+SUBJECT_ID = "synthetic:fixture"
 
 
 def test_integration_runner_accepts_externally_managed_database(tmp_path: Path) -> None:
@@ -135,7 +136,7 @@ def _metric_fixture(
         scope=scope,
         clock=clock,
         key="eligible-exposure",
-        event_type="outcome.eligible_exposure",
+        event_type="outcome.synthetic.eligible_exposure",
         outcome_class=BusinessOutcomeClass.CTA_COMPLETION,
     )
     intent_contract = _contract(
@@ -143,7 +144,7 @@ def _metric_fixture(
         scope=scope,
         clock=clock,
         key="qualified-intent",
-        event_type="outcome.qualified_intent",
+        event_type="outcome.synthetic.qualified_intent",
         outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
     )
     definition = create_outcome_metric_definition(
@@ -151,8 +152,8 @@ def _metric_fixture(
         scope=scope,
         metric_key="qualified_intent_rate",
         outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
-        numerator_event_type="outcome.qualified_intent",
-        denominator_event_type="outcome.eligible_exposure",
+        numerator_event_type="outcome.synthetic.qualified_intent",
+        denominator_event_type="outcome.synthetic.eligible_exposure",
         aggregation=OutcomeMetricAggregation.RATE,
         eligible_population="Synthetic eligible fixture subjects",
         denominator_description="Synthetic eligible exposure events",
@@ -165,6 +166,7 @@ def _metric_fixture(
         data_availability=OutcomeDataAvailability.AVAILABLE,
         downstream_economic_meaning="Qualified intent is closer to business value than reactions.",
         ingestion_contract_id=intent_contract.id,
+        denominator_ingestion_contract_id=exposure_contract.id,
         clock=clock,
     )
     return scope, clock, definition, exposure_contract, intent_contract
@@ -327,7 +329,7 @@ def test_unavailable_count_outcome_remains_missing_instead_of_zero(session: Sess
         scope=scope,
         metric_key="unavailable_revenue_count",
         outcome_class=BusinessOutcomeClass.REVENUE,
-        numerator_event_type="outcome.revenue",
+        numerator_event_type="outcome.synthetic.revenue",
         aggregation=OutcomeMetricAggregation.COUNT,
         eligible_population="No connected revenue source",
         denominator_description="Not applicable to count",
@@ -495,7 +497,7 @@ def test_outcome_payloads_reject_secrets_and_raw_identity(session: Session) -> N
             contract_key="bad-contract",
             payload_schema_version=1,
             outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
-            canonical_event_type="outcome.qualified_intent",
+            canonical_event_type="outcome.synthetic.qualified_intent",
             identity_boundary="synthetic subject only",
             pii_classification="none",
             retention_class="test",
@@ -508,7 +510,7 @@ def test_outcome_payloads_reject_secrets_and_raw_identity(session: Session) -> N
         scope=scope,
         clock=clock,
         key="identity-rejection",
-        event_type="outcome.qualified_intent",
+        event_type="outcome.synthetic.qualified_intent",
         outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
     )
 
@@ -592,7 +594,7 @@ def test_synthetic_contract_schema_is_strict_and_rejects_identity_aliases(
             contract_key="open-schema",
             payload_schema_version=1,
             outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
-            canonical_event_type="outcome.qualified_intent",
+            canonical_event_type="outcome.synthetic.qualified_intent",
             identity_boundary="synthetic subject only",
             pii_classification="none",
             retention_class="test",
@@ -613,7 +615,7 @@ def test_synthetic_contract_schema_is_strict_and_rejects_identity_aliases(
             contract_key="pii-schema",
             payload_schema_version=1,
             outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
-            canonical_event_type="outcome.qualified_intent",
+            canonical_event_type="outcome.synthetic.qualified_intent",
             identity_boundary="synthetic subject only",
             pii_classification="none",
             retention_class="test",
@@ -626,7 +628,7 @@ def test_synthetic_contract_schema_is_strict_and_rejects_identity_aliases(
         scope=scope,
         clock=clock,
         key="strict-payload",
-        event_type="outcome.qualified_intent",
+        event_type="outcome.synthetic.qualified_intent",
         outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
     )
     with pytest.raises(PermanentJobError, match="raw identity"):
@@ -679,7 +681,7 @@ def test_synthetic_idempotency_conflicts_fail_closed(session: Session) -> None:
         scope=scope,
         clock=clock,
         key="idempotency-a",
-        event_type="outcome.qualified_intent.a",
+        event_type="outcome.synthetic.qualified_intent.a",
         outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
     )
     second_contract = _contract(
@@ -687,7 +689,7 @@ def test_synthetic_idempotency_conflicts_fail_closed(session: Session) -> None:
         scope=scope,
         clock=clock,
         key="idempotency-b",
-        event_type="outcome.qualified_intent.b",
+        event_type="outcome.synthetic.qualified_intent.b",
         outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
     )
     kwargs = dict(
@@ -832,3 +834,275 @@ def test_metric_derivation_reuses_older_matching_version(session: Session) -> No
     assert second.created
     assert not replay.created
     assert replay.metric_version.id == first.metric_version.id
+
+
+@pytest.mark.parametrize("reserved_field", sorted(RESERVED_OUTCOME_PAYLOAD_FIELDS))
+def test_reserved_outcome_metadata_is_rejected_in_schema_and_payload(
+    session: Session,
+    reserved_field: str,
+) -> None:
+    scope, clock = _seed_scope(session)
+    schema = {
+        "type": "object",
+        "required": ["subject_type", "subject_id"],
+        "properties": {
+            "subject_type": {"type": "string"},
+            "subject_id": {"type": "string"},
+            reserved_field: {"type": "string"},
+        },
+        "additionalProperties": False,
+    }
+    with pytest.raises(PermanentJobError, match="reserved outcome metadata"):
+        create_outcome_ingestion_contract(
+            session,
+            scope=scope,
+            provider="synthetic_fixture",
+            contract_key=f"reserved-{reserved_field}",
+            payload_schema_version=1,
+            outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
+            canonical_event_type="outcome.synthetic.reserved_metadata",
+            identity_boundary="synthetic subject only",
+            pii_classification="none",
+            retention_class="test",
+            schema=schema,
+            clock=clock,
+        )
+
+    contract = _contract(
+        session,
+        scope=scope,
+        clock=clock,
+        key=f"reserved-payload-{reserved_field}",
+        event_type="outcome.synthetic.reserved_payload",
+        outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
+    )
+    with pytest.raises(PermanentJobError, match="reserved outcome metadata"):
+        ingest_synthetic_outcome_observation(
+            session,
+            scope=scope,
+            ingestion_contract_id=contract.id,
+            external_event_id=f"reserved-payload-{reserved_field}",
+            occurred_at=clock.now(),
+            payload={
+                "subject_type": SUBJECT_TYPE,
+                "subject_id": SUBJECT_ID,
+                reserved_field: "forged",
+            },
+            clock=clock,
+            correlation_id="reserved-payload",
+        )
+
+
+def test_synthetic_contract_cannot_use_phase6_live_event_namespace(session: Session) -> None:
+    scope, clock = _seed_scope(session)
+    schema = {
+        "type": "object",
+        "required": ["subject_type", "subject_id"],
+        "properties": {
+            "subject_type": {"type": "string"},
+            "subject_id": {"type": "string"},
+        },
+        "additionalProperties": False,
+    }
+    before = _count(session, models.BusinessEventModel)
+    with pytest.raises(PermanentJobError, match=r"outcome\.synthetic"):
+        create_outcome_ingestion_contract(
+            session,
+            scope=scope,
+            provider="synthetic_fixture",
+            contract_key="phase6-collision",
+            payload_schema_version=1,
+            outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
+            canonical_event_type="telegram.message_reaction",
+            identity_boundary="synthetic subject only",
+            pii_classification="none",
+            retention_class="test",
+            schema=schema,
+            clock=clock,
+        )
+    assert _count(session, models.BusinessEventModel) == before
+
+
+@pytest.mark.parametrize("unsupported_keyword", ["enum", "pattern", "minLength"])
+def test_contract_schema_rejects_unsupported_property_keywords(
+    session: Session,
+    unsupported_keyword: str,
+) -> None:
+    scope, clock = _seed_scope(session)
+    subject_schema: dict[str, object] = {"type": "string"}
+    subject_schema[unsupported_keyword] = (
+        ["synthetic:fixture"] if unsupported_keyword == "enum" else "^synthetic:"
+    )
+    if unsupported_keyword == "minLength":
+        subject_schema[unsupported_keyword] = 1
+    schema = {
+        "type": "object",
+        "required": ["subject_type", "subject_id"],
+        "properties": {
+            "subject_type": {"type": "string"},
+            "subject_id": subject_schema,
+        },
+        "additionalProperties": False,
+    }
+    with pytest.raises(PermanentJobError, match="unsupported keywords"):
+        create_outcome_ingestion_contract(
+            session,
+            scope=scope,
+            provider="synthetic_fixture",
+            contract_key=f"unsupported-{unsupported_keyword}",
+            payload_schema_version=1,
+            outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
+            canonical_event_type="outcome.synthetic.schema_keyword",
+            identity_boundary="synthetic subject only",
+            pii_classification="none",
+            retention_class="test",
+            schema=schema,
+            clock=clock,
+        )
+
+
+@pytest.mark.parametrize(
+    "subject_id",
+    ["person@example.test", "+3725551234", "real-user-123"],
+)
+def test_synthetic_subject_id_boundary_rejects_real_identity_like_values(
+    session: Session,
+    subject_id: str,
+) -> None:
+    scope, clock = _seed_scope(session)
+    contract = _contract(
+        session,
+        scope=scope,
+        clock=clock,
+        key=f"identity-boundary-{abs(hash(subject_id))}",
+        event_type="outcome.synthetic.identity_boundary",
+        outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
+    )
+    with pytest.raises(PermanentJobError):
+        ingest_synthetic_outcome_observation(
+            session,
+            scope=scope,
+            ingestion_contract_id=contract.id,
+            external_event_id=f"identity-{abs(hash(subject_id))}",
+            occurred_at=clock.now(),
+            payload={"subject_type": SUBJECT_TYPE, "subject_id": subject_id},
+            clock=clock,
+            correlation_id="identity-boundary",
+        )
+
+
+def test_metric_filters_events_by_bound_numerator_and_denominator_contracts(
+    session: Session,
+) -> None:
+    scope, clock, definition, exposure_contract, intent_contract = _metric_fixture(session)
+    same_event_other_contract = _contract(
+        session,
+        scope=scope,
+        clock=clock,
+        key="intent-other-contract",
+        event_type=intent_contract.canonical_event_type,
+        outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
+    )
+    different_provider_contract = create_outcome_ingestion_contract(
+        session,
+        scope=scope,
+        provider="other_synthetic_provider",
+        contract_key="intent-other-provider",
+        payload_schema_version=1,
+        outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
+        canonical_event_type=intent_contract.canonical_event_type,
+        identity_boundary="synthetic subject only",
+        pii_classification="none",
+        retention_class="test",
+        schema=intent_contract.schema,
+        clock=clock,
+    )
+    different_schema_version_contract = create_outcome_ingestion_contract(
+        session,
+        scope=scope,
+        provider=intent_contract.provider,
+        contract_key="intent-schema-v2",
+        payload_schema_version=2,
+        outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
+        canonical_event_type=intent_contract.canonical_event_type,
+        identity_boundary="synthetic subject only",
+        pii_classification="none",
+        retention_class="test",
+        schema=intent_contract.schema,
+        clock=clock,
+    )
+
+    start = clock.now() - timedelta(minutes=10)
+    ingest_synthetic_outcome_observation(
+        session,
+        scope=scope,
+        ingestion_contract_id=exposure_contract.id,
+        external_event_id="bound-exposure",
+        occurred_at=start,
+        payload={"subject_type": SUBJECT_TYPE, "subject_id": SUBJECT_ID},
+        clock=clock,
+        correlation_id="contract-isolation",
+    )
+    for index, contract in enumerate(
+        [
+            same_event_other_contract,
+            different_provider_contract,
+            different_schema_version_contract,
+        ]
+    ):
+        ingest_synthetic_outcome_observation(
+            session,
+            scope=scope,
+            ingestion_contract_id=contract.id,
+            external_event_id=f"wrong-intent-{index}",
+            occurred_at=start + timedelta(minutes=index + 1),
+            payload={"subject_type": SUBJECT_TYPE, "subject_id": SUBJECT_ID},
+            clock=clock,
+            correlation_id="contract-isolation",
+        )
+    ingest_synthetic_outcome_observation(
+        session,
+        scope=scope,
+        ingestion_contract_id=intent_contract.id,
+        external_event_id="bound-intent",
+        occurred_at=start + timedelta(minutes=5),
+        payload={"subject_type": SUBJECT_TYPE, "subject_id": SUBJECT_ID},
+        clock=clock,
+        correlation_id="contract-isolation",
+    )
+
+    metric = _calculate_metric(session, scope=scope, clock=clock, definition=definition)
+    assert metric.numerator_count == 1
+    assert metric.denominator_count == 1
+    assert metric.value_numeric == 1.0
+
+
+def test_rate_definition_requires_explicit_denominator_contract(session: Session) -> None:
+    scope, clock = _seed_scope(session)
+    intent_contract = _contract(
+        session,
+        scope=scope,
+        clock=clock,
+        key="rate-intent",
+        event_type="outcome.synthetic.rate_intent",
+        outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
+    )
+    with pytest.raises(PermanentJobError, match="denominator_ingestion_contract_id"):
+        create_outcome_metric_definition(
+            session,
+            scope=scope,
+            metric_key="invalid_rate",
+            outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
+            numerator_event_type=intent_contract.canonical_event_type,
+            denominator_event_type="outcome.synthetic.rate_exposure",
+            aggregation=OutcomeMetricAggregation.RATE,
+            eligible_population="Synthetic subjects",
+            denominator_description="Synthetic exposures",
+            observation_window_seconds=3600,
+            attribution_method="same_subject_window",
+            attribution_limitations=["synthetic only"],
+            data_availability=OutcomeDataAvailability.AVAILABLE,
+            downstream_economic_meaning="Synthetic only",
+            ingestion_contract_id=intent_contract.id,
+            clock=clock,
+        )

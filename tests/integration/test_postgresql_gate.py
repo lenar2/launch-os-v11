@@ -211,6 +211,12 @@ EXPECTED_FOREIGN_KEYS: set[ForeignKeyPair] = (
         ),
         (
             "outcome_metric_definitions",
+            "denominator_ingestion_contract_id",
+            "outcome_ingestion_contracts",
+            "id",
+        ),
+        (
+            "outcome_metric_definitions",
             "provenance_source_record_id",
             "source_records",
             "id",
@@ -385,6 +391,7 @@ def _assert_schema_contract(database_url: str) -> None:
         }
         assert "ck_outcome_ingestion_contract_schema_version_positive" in outcome_contract_checks
         assert "ck_outcome_ingestion_contract_status" in outcome_contract_checks
+        assert "ck_outcome_ingestion_contract_synthetic_namespace" in outcome_contract_checks
 
         outcome_definition_uniques = {
             tuple(constraint["column_names"])

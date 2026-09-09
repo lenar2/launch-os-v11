@@ -235,6 +235,7 @@ _REFERENCE_POLICY: dict[type[object], tuple[tuple[str, type[Any]], ...]] = {
     ),
     models.OutcomeMetricDefinitionModel: (
         ("ingestion_contract_id", models.OutcomeIngestionContractModel),
+        ("denominator_ingestion_contract_id", models.OutcomeIngestionContractModel),
         ("provenance_source_record_id", models.SourceRecordModel),
     ),
     models.OutcomeMetricVersionModel: (

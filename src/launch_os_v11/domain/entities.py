@@ -567,6 +567,7 @@ class OutcomeMetricDefinition(VersionedBusinessObject):
     downstream_economic_meaning: str = ""
     status: OutcomeInstrumentationStatus = OutcomeInstrumentationStatus.DISABLED_NON_LIVE
     ingestion_contract_id: str | None = None
+    denominator_ingestion_contract_id: str | None = None
     provenance_source_record_id: str | None = None
 
 

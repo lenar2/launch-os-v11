@@ -985,6 +985,10 @@ class OutcomeIngestionContractModel(BusinessScopedMixin, Base):
             ),
             name="ck_outcome_ingestion_contract_class",
         ),
+        CheckConstraint(
+            "canonical_event_type like 'outcome.synthetic.%'",
+            name="ck_outcome_ingestion_contract_synthetic_namespace",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -1059,6 +1063,9 @@ class OutcomeMetricDefinitionModel(BusinessScopedMixin, Base):
     downstream_economic_meaning: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     ingestion_contract_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("outcome_ingestion_contracts.id"), index=True
+    )
+    denominator_ingestion_contract_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("outcome_ingestion_contracts.id"), index=True
     )
     provenance_source_record_id: Mapped[str | None] = mapped_column(

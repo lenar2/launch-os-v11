@@ -30,7 +30,31 @@ from launch_os_v11.runtime.errors import PermanentJobError
 from launch_os_v11.runtime.security import assert_no_secrets
 
 OUTCOME_METRIC_CALCULATION_VERSION = "business_outcomes.metric.v1"
-OUTCOME_EVENT_RULE_VERSION = "business_outcomes.event_filter.v1"
+OUTCOME_EVENT_RULE_VERSION = "business_outcomes.event_filter.v2"
+SYNTHETIC_OUTCOME_EVENT_PREFIX = "outcome.synthetic."
+SYNTHETIC_SUBJECT_ID_PATTERN = re.compile(r"^synthetic:[A-Za-z0-9._-]{1,26}$")
+SUPPORTED_SCHEMA_TOP_LEVEL_KEYS = {"type", "required", "properties", "additionalProperties"}
+SUPPORTED_SCHEMA_PROPERTY_KEYS = {"type"}
+RESERVED_OUTCOME_PAYLOAD_FIELDS = {
+    "action_id",
+    "approval_id",
+    "canonical_event_type",
+    "causation_id",
+    "correlation_id",
+    "decision_id",
+    "execution_id",
+    "experiment_id",
+    "external_event_id",
+    "ingestion_contract_id",
+    "non_live",
+    "outcome_class",
+    "payload_schema_version",
+    "provider",
+    "publication_id",
+    "request_fingerprint",
+    "source_record_id",
+    "synthetic_non_live",
+}
 
 PII_FIELD_NAMES = {
     "email",
@@ -91,6 +115,10 @@ def create_outcome_ingestion_contract(
         raise PermanentJobError("payload_schema_version must be positive")
     if not provider or not contract_key or not canonical_event_type:
         raise PermanentJobError("outcome ingestion contract identifiers are required")
+    if not canonical_event_type.startswith(SYNTHETIC_OUTCOME_EVENT_PREFIX):
+        raise PermanentJobError(
+            "disabled outcome contracts require isolated outcome.synthetic.* event types"
+        )
     source = _source_record(
         session,
         scope=scope,
@@ -169,15 +197,30 @@ def create_outcome_metric_definition(
     denominator_event_type: str | None = None,
     value_field: str | None = None,
     ingestion_contract_id: str | None = None,
+    denominator_ingestion_contract_id: str | None = None,
 ) -> models.OutcomeMetricDefinitionModel:
     if aggregation == OutcomeMetricAggregation.RATE and denominator_event_type is None:
         raise PermanentJobError("rate outcome metrics require denominator_event_type")
+    if (
+        aggregation == OutcomeMetricAggregation.RATE
+        and denominator_ingestion_contract_id is None
+    ):
+        raise PermanentJobError(
+            "rate outcome metrics require denominator_ingestion_contract_id"
+        )
     if aggregation == OutcomeMetricAggregation.SUM and value_field is None:
         raise PermanentJobError("sum outcome metrics require value_field")
     if observation_window_seconds < 1:
         raise PermanentJobError("observation_window_seconds must be positive")
     if not metric_key or not numerator_event_type:
         raise PermanentJobError("outcome metric identifiers are required")
+    if (
+        data_availability != OutcomeDataAvailability.UNAVAILABLE
+        and ingestion_contract_id is None
+    ):
+        raise PermanentJobError(
+            "available outcome metrics require an explicit numerator ingestion contract"
+        )
     if ingestion_contract_id is not None:
         ingestion_contract = ScopedRepository(
             session, scope, models.OutcomeIngestionContractModel
@@ -194,6 +237,26 @@ def create_outcome_metric_definition(
             raise PermanentJobError(
                 "outcome metric class must match ingestion contract outcome class"
             )
+    if denominator_event_type is None and denominator_ingestion_contract_id is not None:
+        raise PermanentJobError(
+            "denominator ingestion contract requires denominator_event_type"
+        )
+    if denominator_event_type is not None:
+        if denominator_ingestion_contract_id is None:
+            raise PermanentJobError(
+                "denominator_event_type requires denominator_ingestion_contract_id"
+            )
+        denominator_contract = ScopedRepository(
+            session, scope, models.OutcomeIngestionContractModel
+        ).require(denominator_ingestion_contract_id)
+        if denominator_contract.status != OutcomeInstrumentationStatus.DISABLED_NON_LIVE.value:
+            raise PermanentJobError(
+                "outcome denominator requires a disabled non-live ingestion contract"
+            )
+        if denominator_contract.canonical_event_type != denominator_event_type:
+            raise PermanentJobError(
+                "outcome metric denominator event type must match denominator contract"
+            )
     source = _source_record(
         session,
         scope=scope,
@@ -206,6 +269,8 @@ def create_outcome_metric_definition(
             "outcome_class": outcome_class.value,
             "numerator_event_type": numerator_event_type,
             "denominator_event_type": denominator_event_type,
+            "ingestion_contract_id": ingestion_contract_id,
+            "denominator_ingestion_contract_id": denominator_ingestion_contract_id,
             "aggregation": aggregation.value,
             "non_live": True,
         },
@@ -232,6 +297,7 @@ def create_outcome_metric_definition(
         downstream_economic_meaning=downstream_economic_meaning,
         status=OutcomeInstrumentationStatus.DISABLED_NON_LIVE.value,
         ingestion_contract_id=ingestion_contract_id,
+        denominator_ingestion_contract_id=denominator_ingestion_contract_id,
         provenance_source_record_id=source.id,
     )
     ScopedRepository(session, scope, models.OutcomeMetricDefinitionModel).add(definition)
@@ -273,6 +339,7 @@ def ingest_synthetic_outcome_observation(
     causation_id: str | None = None,
 ) -> OutcomeIngestResult:
     assert_no_secrets(payload)
+    _reject_reserved_payload_fields(payload)
     _assert_no_raw_identity(payload)
     contract = ScopedRepository(
         session, scope, models.OutcomeIngestionContractModel
@@ -363,11 +430,11 @@ def ingest_synthetic_outcome_observation(
     )
     ScopedRepository(session, scope, models.EvidenceModel).add(evidence)
     event_payload = {
+        **dict(payload),
         "outcome_class": contract.outcome_class,
         "ingestion_contract_id": contract.id,
         "source_record_id": source.id,
         "synthetic_non_live": True,
-        **dict(payload),
     }
     business_event = models.BusinessEventModel(
         id=new_id(),
@@ -442,28 +509,34 @@ def calculate_outcome_metric_version(
         raise PermanentJobError(
             "outcome metric calculation is only enabled for non-live definitions"
         )
-    numerator_events = _events_for_metric(
-        session,
-        scope=scope,
-        event_type=definition.numerator_event_type,
-        subject_type=subject_type,
-        subject_id=subject_id,
-        source_window_start=source_window_start,
-        source_window_end=source_window_end,
-    )
-    denominator_events = (
-        _events_for_metric(
+    if definition.data_availability == OutcomeDataAvailability.UNAVAILABLE.value:
+        numerator_events: list[models.BusinessEventModel] = []
+        denominator_events: list[models.BusinessEventModel] = []
+    else:
+        numerator_events = _events_for_metric(
             session,
             scope=scope,
-            event_type=definition.denominator_event_type,
+            event_type=definition.numerator_event_type,
+            ingestion_contract_id=definition.ingestion_contract_id,
             subject_type=subject_type,
             subject_id=subject_id,
             source_window_start=source_window_start,
             source_window_end=source_window_end,
         )
-        if definition.denominator_event_type is not None
-        else []
-    )
+        denominator_events = (
+            _events_for_metric(
+                session,
+                scope=scope,
+                event_type=definition.denominator_event_type,
+                ingestion_contract_id=definition.denominator_ingestion_contract_id,
+                subject_type=subject_type,
+                subject_id=subject_id,
+                source_window_start=source_window_start,
+                source_window_end=source_window_end,
+            )
+            if definition.denominator_event_type is not None
+            else []
+        )
     all_metric_events = [*denominator_events, *numerator_events]
     if any(event.payload.get("synthetic_non_live") is not True for event in all_metric_events):
         raise PermanentJobError(
@@ -790,6 +863,11 @@ def create_outcome_learning(
     metric = ScopedRepository(session, scope, models.OutcomeMetricVersionModel).require(
         metric_version_id
     )
+    session.execute(
+        select(models.OutcomeMetricVersionModel.id)
+        .where(models.OutcomeMetricVersionModel.id == metric.id)
+        .with_for_update()
+    ).scalar_one()
     economic_link = ScopedRepository(
         session, scope, models.OutcomeEconomicLinkModel
     ).require(economic_link_id)
@@ -974,6 +1052,7 @@ def _events_for_metric(
     *,
     scope: TenantScope,
     event_type: str | None,
+    ingestion_contract_id: str | None,
     subject_type: str,
     subject_id: str,
     source_window_start: datetime,
@@ -981,6 +1060,10 @@ def _events_for_metric(
 ) -> list[models.BusinessEventModel]:
     if event_type is None:
         return []
+    if ingestion_contract_id is None:
+        raise PermanentJobError(
+            "disabled outcome metric event selection requires ingestion contract provenance"
+        )
     rows = list(
         session.scalars(
             select(models.BusinessEventModel)
@@ -999,6 +1082,8 @@ def _events_for_metric(
         for row in rows
         if row.payload.get("subject_type") == subject_type
         and row.payload.get("subject_id") == subject_id
+        and row.payload.get("ingestion_contract_id") == ingestion_contract_id
+        and row.payload.get("synthetic_non_live") is True
     ]
 
 
@@ -1091,6 +1176,9 @@ def _outbox(
 
 
 def _validate_contract_schema(schema: Mapping[str, object]) -> None:
+    unsupported_top_level = set(schema) - SUPPORTED_SCHEMA_TOP_LEVEL_KEYS
+    if unsupported_top_level:
+        raise PermanentJobError("outcome contract schema contains unsupported keywords")
     if schema.get("type") != "object":
         raise PermanentJobError("outcome contract schema must be an object schema")
     properties = schema.get("properties")
@@ -1110,11 +1198,24 @@ def _validate_contract_schema(schema: Mapping[str, object]) -> None:
     missing_required = [item for item in required if item not in properties]
     if missing_required:
         raise PermanentJobError("outcome contract schema required fields must be declared")
+    if not {"subject_type", "subject_id"}.issubset(set(required)):
+        raise PermanentJobError(
+            "synthetic outcome contracts must require subject_type and subject_id"
+        )
     for field_name, field_schema in properties.items():
         if not isinstance(field_name, str) or not isinstance(field_schema, Mapping):
             raise PermanentJobError("outcome contract schema properties are invalid")
+        if field_name in RESERVED_OUTCOME_PAYLOAD_FIELDS:
+            raise PermanentJobError(
+                "reserved outcome metadata fields are not allowed in contract schemas"
+            )
         if _looks_like_pii_field_name(field_name):
             raise PermanentJobError("raw identity fields are not allowed in outcome schemas")
+        unsupported_property = set(field_schema) - SUPPORTED_SCHEMA_PROPERTY_KEYS
+        if unsupported_property:
+            raise PermanentJobError(
+                "outcome contract property schema contains unsupported keywords"
+            )
         field_type = field_schema.get("type")
         if field_type not in {"string", "integer", "number", "boolean"}:
             raise PermanentJobError(
@@ -1146,6 +1247,11 @@ def _validate_payload_against_contract_schema(
             raise PermanentJobError(
                 f"synthetic outcome payload field {field_name} has wrong type"
             )
+    subject_id = payload.get("subject_id")
+    if not isinstance(subject_id, str) or not SYNTHETIC_SUBJECT_ID_PATTERN.fullmatch(subject_id):
+        raise PermanentJobError(
+            "synthetic outcome subject_id must use the synthetic:<opaque-id> boundary"
+        )
 
 
 def _matches_schema_scalar_type(value: object, expected_type: object) -> bool:
@@ -1158,6 +1264,21 @@ def _matches_schema_scalar_type(value: object, expected_type: object) -> bool:
     if expected_type == "number":
         return isinstance(value, int | float) and not isinstance(value, bool)
     return False
+
+
+def _reject_reserved_payload_fields(payload: Mapping[str, object]) -> None:
+    collisions = set(payload) & RESERVED_OUTCOME_PAYLOAD_FIELDS
+    if collisions:
+        raise PermanentJobError(
+            "reserved outcome metadata fields are not allowed in observation payloads"
+        )
+
+
+def _looks_like_raw_identity_value(value: str) -> bool:
+    if "@" in value and re.fullmatch(r"[^@\s]+@[^@\s]+", value):
+        return True
+    compact = re.sub(r"[\s()+.-]", "", value)
+    return compact.isdigit() and len(compact) >= 7
 
 
 def _looks_like_pii_field_name(field_name: str) -> bool:
@@ -1188,6 +1309,8 @@ def _assert_no_raw_identity(payload: Mapping[str, object]) -> None:
     for key, value in payload.items():
         if key.lower() in PII_FIELD_NAMES or _looks_like_pii_field_name(key):
             raise PermanentJobError("raw identity fields are not allowed in outcome fixtures")
+        if isinstance(value, str) and _looks_like_raw_identity_value(value):
+            raise PermanentJobError("raw identity values are not allowed in outcome fixtures")
         if isinstance(value, Mapping):
             _assert_no_raw_identity(value)
         elif isinstance(value, Sequence) and not isinstance(value, bytes | bytearray | str):

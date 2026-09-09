@@ -67,6 +67,10 @@ def upgrade() -> None:
             f"outcome_class in ({OUTCOME_CLASSES})",
             name="ck_outcome_ingestion_contract_class",
         ),
+        sa.CheckConstraint(
+            "canonical_event_type like 'outcome.synthetic.%'",
+            name="ck_outcome_ingestion_contract_synthetic_namespace",
+        ),
     )
     _indexes(
         "outcome_ingestion_contracts",
@@ -106,11 +110,15 @@ def upgrade() -> None:
         sa.Column("downstream_economic_meaning", sa.Text(), nullable=False),
         sa.Column("status", sa.String(length=64), nullable=False),
         sa.Column("ingestion_contract_id", sa.String(length=36), nullable=True),
+        sa.Column("denominator_ingestion_contract_id", sa.String(length=36), nullable=True),
         sa.Column("provenance_source_record_id", sa.String(length=36), nullable=True),
         sa.ForeignKeyConstraint(["organization_id"], ["organizations.id"]),
         sa.ForeignKeyConstraint(["business_id"], ["businesses.id"]),
         sa.ForeignKeyConstraint(
             ["ingestion_contract_id"], ["outcome_ingestion_contracts.id"]
+        ),
+        sa.ForeignKeyConstraint(
+            ["denominator_ingestion_contract_id"], ["outcome_ingestion_contracts.id"]
         ),
         sa.ForeignKeyConstraint(["provenance_source_record_id"], ["source_records.id"]),
         sa.UniqueConstraint(
@@ -155,6 +163,7 @@ def upgrade() -> None:
             "denominator_event_type",
             "status",
             "ingestion_contract_id",
+            "denominator_ingestion_contract_id",
             "provenance_source_record_id",
         ],
     )

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from threading import Barrier
 from typing import Any
 
 import pytest
@@ -545,7 +547,7 @@ def test_governed_ai_to_business_outcome_loop_stays_disabled_and_non_authoritati
                 contract_key="p009-ai-exposure",
                 payload_schema_version=1,
                 outcome_class=BusinessOutcomeClass.CTA_COMPLETION,
-                canonical_event_type="outcome.p009_ai_exposure",
+                canonical_event_type="outcome.synthetic.p009_ai_exposure",
                 identity_boundary="synthetic subject only",
                 pii_classification="none",
                 retention_class="internal_test",
@@ -559,7 +561,7 @@ def test_governed_ai_to_business_outcome_loop_stays_disabled_and_non_authoritati
                 contract_key="p009-ai-qualified-intent",
                 payload_schema_version=1,
                 outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
-                canonical_event_type="outcome.p009_ai_qualified_intent",
+                canonical_event_type="outcome.synthetic.p009_ai_qualified_intent",
                 identity_boundary="synthetic subject only",
                 pii_classification="none",
                 retention_class="internal_test",
@@ -571,8 +573,8 @@ def test_governed_ai_to_business_outcome_loop_stays_disabled_and_non_authoritati
                 scope=scope,
                 metric_key="p009_ai_qualified_intent_rate",
                 outcome_class=BusinessOutcomeClass.QUALIFIED_INTENT,
-                numerator_event_type="outcome.p009_ai_qualified_intent",
-                denominator_event_type="outcome.p009_ai_exposure",
+                numerator_event_type="outcome.synthetic.p009_ai_qualified_intent",
+                denominator_event_type="outcome.synthetic.p009_ai_exposure",
                 aggregation=OutcomeMetricAggregation.RATE,
                 eligible_population="Synthetic internal cohort only",
                 denominator_description="Synthetic eligible exposures",
@@ -588,10 +590,11 @@ def test_governed_ai_to_business_outcome_loop_stays_disabled_and_non_authoritati
                     "Candidate internal metric only; real economic linkage is unknown."
                 ),
                 ingestion_contract_id=intent_contract.id,
+                denominator_ingestion_contract_id=exposure_contract.id,
                 clock=clock,
             )
 
-            payload = {"subject_type": "SyntheticExperiment", "subject_id": "cohort-A"}
+            payload = {"subject_type": "SyntheticExperiment", "subject_id": "synthetic:cohort-A"}
             ingest_synthetic_outcome_observation(
                 session,
                 scope=scope,
@@ -631,7 +634,7 @@ def test_governed_ai_to_business_outcome_loop_stays_disabled_and_non_authoritati
                 scope=scope,
                 metric_definition_id=definition.id,
                 subject_type="SyntheticExperiment",
-                subject_id="cohort-A",
+                subject_id="synthetic:cohort-A",
                 source_window_start=clock.now() - timedelta(minutes=1),
                 source_window_end=clock.now() + timedelta(minutes=1),
                 clock=clock,
@@ -695,6 +698,122 @@ def test_governed_ai_to_business_outcome_loop_stays_disabled_and_non_authoritati
             assert _count(session, models.ApprovalModel) == 0
             assert _count(session, models.PublicationModel) == 0
             assert _count(session, models.ExecutionModel) == 0
+    finally:
+        engine.dispose()
+        get_settings.cache_clear()
+
+
+def test_outcome_learning_concurrent_materialization_is_singleton(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _database_url()
+    config = _alembic_config(database_url, monkeypatch)
+    _clear_test_database(database_url)
+    command.downgrade(config, "base")
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url, future=True)
+    factory = create_session_factory(engine)
+    try:
+        with factory.begin() as session:
+            scope, clock, definition, exposure_contract, intent_contract = _metric_fixture(session)
+            _ingest_fixture_events(
+                session,
+                scope=scope,
+                clock=clock,
+                exposure_contract=exposure_contract,
+                intent_contract=intent_contract,
+            )
+            metric = _calculate_metric(
+                session,
+                scope=scope,
+                clock=clock,
+                definition=definition,
+            )
+            economic = create_outcome_economic_link(
+                session,
+                scope=scope,
+                metric_version_id=metric.id,
+                link_type=OutcomeEconomicLinkType.HYPOTHETICAL_PROXY,
+                downstream_outcome_class=BusinessOutcomeClass.CONTRIBUTION_MARGIN,
+                epistemic_status=EpistemicStatus.HYPOTHESIS,
+                value_per_unit_cents=100,
+                direct_cost_cents=0,
+                fully_loaded_execution_cost_cents=10,
+                opportunity_cost_cents=10,
+                bounded_downside_cents=20,
+                expected_benefit_cents=100,
+                limitations=["synthetic concurrency fixture"],
+                clock=clock,
+            ).economic_link
+            metric_id = metric.id
+            economic_id = economic.id
+            metric_evidence_id = metric.evidence_id
+            economic_evidence_id = economic.evidence_id
+            org_id = scope.organization_id
+            business_id = scope.business_id
+
+        barrier = Barrier(2)
+
+        def materialize() -> tuple[str, bool]:
+            local_clock = FixedClock(datetime(2026, 8, 28, 8, 0, tzinfo=UTC))
+            with factory.begin() as session:
+                barrier.wait(timeout=10)
+                result = create_outcome_learning(
+                    session,
+                    scope=TenantScope(org_id, business_id),
+                    metric_version_id=metric_id,
+                    economic_link_id=economic_id,
+                    clock=local_clock,
+                )
+                return result.learning.id, result.created
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: materialize(), range(2)))
+
+        assert len({learning_id for learning_id, _ in results}) == 1
+        assert sorted(created for _, created in results) == [False, True]
+
+        with factory() as session:
+            matching_learnings = [
+                learning
+                for learning in session.scalars(
+                    select(models.LearningModel).where(
+                        models.LearningModel.organization_id == org_id,
+                        models.LearningModel.business_id == business_id,
+                    )
+                )
+                if metric_evidence_id in learning.evidence_ids
+                and economic_evidence_id in learning.evidence_ids
+            ]
+            assert len(matching_learnings) == 1
+            learning_id = matching_learnings[0].id
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(models.AuditLogModel)
+                    .where(
+                        models.AuditLogModel.organization_id == org_id,
+                        models.AuditLogModel.business_id == business_id,
+                        models.AuditLogModel.action == "OUTCOME_LEARNING_MATERIALIZED",
+                        models.AuditLogModel.object_id == learning_id,
+                    )
+                )
+                or 0
+            ) == 1
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(models.OutboxEventModel)
+                    .where(
+                        models.OutboxEventModel.organization_id == org_id,
+                        models.OutboxEventModel.business_id == business_id,
+                        models.OutboxEventModel.event_type == "outcome.learning.materialized",
+                        models.OutboxEventModel.aggregate_id == learning_id,
+                    )
+                )
+                or 0
+            ) == 1
     finally:
         engine.dispose()
         get_settings.cache_clear()
