@@ -386,6 +386,79 @@ def test_model_router_and_fake_adapter_are_deterministic_and_typed() -> None:
         )
 
 
+def test_model_router_passes_configured_openai_connect_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class StubOpenAIAdapter:
+        provider_name = "openai"
+
+        def __init__(
+            self,
+            *,
+            api_key: str | None,
+            model_name: str,
+            connect_timeout_seconds: float,
+        ) -> None:
+            captured["api_key_present"] = bool(api_key)
+            captured["model_name"] = model_name
+            captured["connect_timeout_seconds"] = connect_timeout_seconds
+
+    monkeypatch.setattr(
+        "launch_os_v11.ai_runtime.adapters.openai.OpenAIResponsesAdapter",
+        StubOpenAIAdapter,
+    )
+    router = model_router_from_settings(
+        Settings(
+            LAUNCH_OS_FEATURE_V11_AI_TEAM=True,
+            LAUNCH_OS_AI_MODEL_PROVIDER="openai",
+            LAUNCH_OS_AI_OPENAI_TEXT_MODEL="configured-openai-model",
+            LAUNCH_OS_AI_OPENAI_CONNECT_TIMEOUT_SECONDS=31.0,
+            OPENAI_API_KEY="placeholder-key",
+        )
+    )
+
+    assert captured == {
+        "api_key_present": True,
+        "model_name": "configured-openai-model",
+        "connect_timeout_seconds": 31.0,
+    }
+    assert router.route_matrix()["FAST_STRUCTURED_CLASSIFICATION"]["model"] == (
+        "configured-openai-model"
+    )
+
+
+def test_openai_adapter_expands_connect_timeout_without_shortening_response_timeouts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class StubOpenAIClient:
+        pass
+
+    def fake_openai(**kwargs: object) -> StubOpenAIClient:
+        captured.update(kwargs)
+        return StubOpenAIClient()
+
+    monkeypatch.setattr(
+        "launch_os_v11.ai_runtime.adapters.openai.OpenAI",
+        fake_openai,
+    )
+    OpenAIResponsesAdapter(
+        api_key="placeholder-key",
+        model_name="configured-openai-model",
+        connect_timeout_seconds=23.0,
+    )
+
+    timeout: Any = captured["timeout"]
+    assert timeout.connect == 23.0
+    assert timeout.read == 600
+    assert timeout.write == 600
+    assert timeout.pool == 600
+    assert captured["max_retries"] == 0
+
+
 def test_openai_adapter_uses_responses_parse_without_tools_and_handles_outcomes() -> None:
     parsed = RuntimeProbeOutput(message="parsed", confidence=0.8)
     response = SimpleNamespace(

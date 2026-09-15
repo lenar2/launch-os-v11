@@ -35,6 +35,49 @@ class CausalityClass(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class BusinessOutcomeClass(StrEnum):
+    QUALIFIED_INTENT = "QUALIFIED_INTENT"
+    CTA_COMPLETION = "CTA_COMPLETION"
+    LEAD = "LEAD"
+    APPLICATION = "APPLICATION"
+    BOOKING = "BOOKING"
+    CHECKOUT = "CHECKOUT"
+    PURCHASE_PAYMENT = "PURCHASE_PAYMENT"
+    REFUND = "REFUND"
+    RENEWAL = "RENEWAL"
+    RETENTION = "RETENTION"
+    REVENUE = "REVENUE"
+    COST = "COST"
+    CONTRIBUTION_MARGIN = "CONTRIBUTION_MARGIN"
+
+
+class OutcomeInstrumentationStatus(StrEnum):
+    DRAFT = "DRAFT"
+    DISABLED_NON_LIVE = "DISABLED_NON_LIVE"
+    RETIRED = "RETIRED"
+
+
+class OutcomeMetricAggregation(StrEnum):
+    COUNT = "COUNT"
+    SUM = "SUM"
+    RATE = "RATE"
+
+
+class OutcomeDataAvailability(StrEnum):
+    AVAILABLE = "AVAILABLE"
+    PARTIAL = "PARTIAL"
+    UNAVAILABLE = "UNAVAILABLE"
+    STALE = "STALE"
+
+
+class OutcomeEconomicLinkType(StrEnum):
+    DIRECT_REVENUE = "DIRECT_REVENUE"
+    CONTRIBUTION_MARGIN = "CONTRIBUTION_MARGIN"
+    VALUE_PROXY = "VALUE_PROXY"
+    HYPOTHETICAL_PROXY = "HYPOTHETICAL_PROXY"
+    NONE = "NONE"
+
+
 class DecisionStatus(StrEnum):
     ACTIVE = "ACTIVE"
     SUPERSEDED = "SUPERSEDED"

@@ -8,6 +8,7 @@ from typing import Any
 from launch_os_v11.domain.enums import (
     ActionStatus,
     ApprovalStatus,
+    BusinessOutcomeClass,
     CausalityClass,
     ControllerVerdict,
     DecisionStatus,
@@ -17,6 +18,10 @@ from launch_os_v11.domain.enums import (
     JobStatus,
     LaunchPhaseStatus,
     OutboxStatus,
+    OutcomeDataAvailability,
+    OutcomeEconomicLinkType,
+    OutcomeInstrumentationStatus,
+    OutcomeMetricAggregation,
     PermissionMode,
     PublicationStatus,
     SourceTrust,
@@ -527,6 +532,86 @@ class BusinessEvent(VersionedBusinessObject):
     payload: dict[str, Any] = field(default_factory=dict)
     correlation_id: str | None = None
     causation_id: str | None = None
+
+
+@dataclass
+class OutcomeIngestionContract(VersionedBusinessObject):
+    provider: str = ""
+    contract_key: str = ""
+    payload_schema_version: int = 1
+    outcome_class: BusinessOutcomeClass = BusinessOutcomeClass.QUALIFIED_INTENT
+    canonical_event_type: str = ""
+    identity_boundary: str = ""
+    pii_classification: str = ""
+    retention_class: str = ""
+    status: OutcomeInstrumentationStatus = OutcomeInstrumentationStatus.DISABLED_NON_LIVE
+    schema: dict[str, Any] = field(default_factory=dict)
+    provenance_source_record_id: str | None = None
+
+
+@dataclass
+class OutcomeMetricDefinition(VersionedBusinessObject):
+    metric_key: str = ""
+    definition_version: int = 1
+    outcome_class: BusinessOutcomeClass = BusinessOutcomeClass.QUALIFIED_INTENT
+    numerator_event_type: str = ""
+    denominator_event_type: str | None = None
+    aggregation: OutcomeMetricAggregation = OutcomeMetricAggregation.COUNT
+    value_field: str | None = None
+    eligible_population: str = ""
+    denominator_description: str = ""
+    observation_window_seconds: int = 1
+    attribution_method: str = ""
+    attribution_limitations: tuple[str, ...] = ()
+    data_availability: OutcomeDataAvailability = OutcomeDataAvailability.UNAVAILABLE
+    downstream_economic_meaning: str = ""
+    status: OutcomeInstrumentationStatus = OutcomeInstrumentationStatus.DISABLED_NON_LIVE
+    ingestion_contract_id: str | None = None
+    denominator_ingestion_contract_id: str | None = None
+    provenance_source_record_id: str | None = None
+
+
+@dataclass
+class OutcomeMetricVersion(VersionedBusinessObject):
+    metric_definition_id: str = ""
+    version_number: int = 1
+    subject_type: str = ""
+    subject_id: str = ""
+    value_numeric: float | None = None
+    numerator_count: int = 0
+    denominator_count: int | None = None
+    availability_status: OutcomeDataAvailability = OutcomeDataAvailability.UNAVAILABLE
+    coverage_status: str = "UNAVAILABLE"
+    source_window_start: datetime = field(default_factory=utc_now)
+    source_window_end: datetime = field(default_factory=utc_now)
+    included_business_event_ids: tuple[str, ...] = ()
+    excluded_event_rule_version: str = ""
+    calculation_version: str = ""
+    calculated_at: datetime = field(default_factory=utc_now)
+    corrects_metric_version_id: str | None = None
+    derivation_hash: str = ""
+    evidence_id: str = ""
+    synthetic_non_live: bool = True
+
+
+@dataclass
+class OutcomeEconomicLink(VersionedBusinessObject):
+    metric_version_id: str = ""
+    version_number: int = 1
+    link_type: OutcomeEconomicLinkType = OutcomeEconomicLinkType.NONE
+    downstream_outcome_class: BusinessOutcomeClass = BusinessOutcomeClass.REVENUE
+    epistemic_status: EpistemicStatus = EpistemicStatus.UNKNOWN
+    value_per_unit_cents: int | None = None
+    direct_cost_cents: int | None = None
+    fully_loaded_execution_cost_cents: int | None = None
+    opportunity_cost_cents: int | None = None
+    bounded_downside_cents: int | None = None
+    expected_benefit_cents: int | None = None
+    hurdle_multiplier: int = 3
+    supports_go: bool = False
+    evidence_id: str = ""
+    synthetic_non_live: bool = True
+    limitations: tuple[str, ...] = ()
 
 
 @dataclass
