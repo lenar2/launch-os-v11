@@ -8,6 +8,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -956,3 +957,310 @@ class LearningModel(BusinessScopedMixin, Base):
     evidence_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     causality_class: Mapped[str] = mapped_column(String(128), nullable=False)
     confidence: Mapped[float | None]
+
+
+class OutcomeIngestionContractModel(BusinessScopedMixin, Base):
+    __tablename__ = "outcome_ingestion_contracts"
+    __table_args__ = (
+        UniqueConstraint(
+            "business_id",
+            "provider",
+            "contract_key",
+            "payload_schema_version",
+            name="uq_outcome_ingestion_contract_version",
+        ),
+        CheckConstraint(
+            "payload_schema_version >= 1",
+            name="ck_outcome_ingestion_contract_schema_version_positive",
+        ),
+        CheckConstraint(
+            "status in ('DRAFT', 'DISABLED_NON_LIVE', 'RETIRED')",
+            name="ck_outcome_ingestion_contract_status",
+        ),
+        CheckConstraint(
+            (
+                "outcome_class in ('QUALIFIED_INTENT', 'CTA_COMPLETION', 'LEAD', "
+                "'APPLICATION', 'BOOKING', 'CHECKOUT', 'PURCHASE_PAYMENT', 'REFUND', "
+                "'RENEWAL', 'RETENTION', 'REVENUE', 'COST', 'CONTRIBUTION_MARGIN')"
+            ),
+            name="ck_outcome_ingestion_contract_class",
+        ),
+        CheckConstraint(
+            "canonical_event_type like 'outcome.synthetic.%'",
+            name="ck_outcome_ingestion_contract_synthetic_namespace",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    contract_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    payload_schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    outcome_class: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    canonical_event_type: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    identity_boundary: Mapped[str] = mapped_column(Text, nullable=False)
+    pii_classification: Mapped[str] = mapped_column(String(64), nullable=False)
+    retention_class: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    schema: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    provenance_source_record_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("source_records.id"), index=True
+    )
+
+
+class OutcomeMetricDefinitionModel(BusinessScopedMixin, Base):
+    __tablename__ = "outcome_metric_definitions"
+    __table_args__ = (
+        UniqueConstraint(
+            "business_id",
+            "metric_key",
+            "definition_version",
+            name="uq_outcome_metric_definition_version",
+        ),
+        CheckConstraint(
+            "definition_version >= 1",
+            name="ck_outcome_metric_definition_version_positive",
+        ),
+        CheckConstraint(
+            "observation_window_seconds >= 1",
+            name="ck_outcome_metric_definition_window_positive",
+        ),
+        CheckConstraint(
+            "aggregation in ('COUNT', 'SUM', 'RATE')",
+            name="ck_outcome_metric_definition_aggregation",
+        ),
+        CheckConstraint(
+            "data_availability in ('AVAILABLE', 'PARTIAL', 'UNAVAILABLE', 'STALE')",
+            name="ck_outcome_metric_definition_data_availability",
+        ),
+        CheckConstraint(
+            "status in ('DRAFT', 'DISABLED_NON_LIVE', 'RETIRED')",
+            name="ck_outcome_metric_definition_status",
+        ),
+        CheckConstraint(
+            (
+                "outcome_class in ('QUALIFIED_INTENT', 'CTA_COMPLETION', 'LEAD', "
+                "'APPLICATION', 'BOOKING', 'CHECKOUT', 'PURCHASE_PAYMENT', 'REFUND', "
+                "'RENEWAL', 'RETENTION', 'REVENUE', 'COST', 'CONTRIBUTION_MARGIN')"
+            ),
+            name="ck_outcome_metric_definition_class",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    metric_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    definition_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    outcome_class: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    numerator_event_type: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    denominator_event_type: Mapped[str | None] = mapped_column(String(128), index=True)
+    aggregation: Mapped[str] = mapped_column(String(32), nullable=False)
+    value_field: Mapped[str | None] = mapped_column(String(128))
+    eligible_population: Mapped[str] = mapped_column(Text, nullable=False)
+    denominator_description: Mapped[str] = mapped_column(Text, nullable=False)
+    observation_window_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    attribution_method: Mapped[str] = mapped_column(String(128), nullable=False)
+    attribution_limitations: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    data_availability: Mapped[str] = mapped_column(String(32), nullable=False)
+    downstream_economic_meaning: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    ingestion_contract_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("outcome_ingestion_contracts.id"), index=True
+    )
+    denominator_ingestion_contract_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("outcome_ingestion_contracts.id"), index=True
+    )
+    provenance_source_record_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("source_records.id"), index=True
+    )
+
+
+class OutcomeMetricVersionModel(BusinessScopedMixin, Base):
+    __tablename__ = "outcome_metric_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "metric_definition_id",
+            "subject_type",
+            "subject_id",
+            "version_number",
+            name="uq_outcome_metric_version_definition_subject_version",
+        ),
+        UniqueConstraint("derivation_hash", name="uq_outcome_metric_version_derivation_hash"),
+        CheckConstraint(
+            "version_number >= 1",
+            name="ck_outcome_metric_version_positive",
+        ),
+        CheckConstraint(
+            "numerator_count >= 0",
+            name="ck_outcome_metric_version_numerator_nonnegative",
+        ),
+        CheckConstraint(
+            "denominator_count is null or denominator_count >= 0",
+            name="ck_outcome_metric_version_denominator_nonnegative",
+        ),
+        CheckConstraint(
+            "availability_status in ('AVAILABLE', 'PARTIAL', 'UNAVAILABLE', 'STALE')",
+            name="ck_outcome_metric_version_availability",
+        ),
+        CheckConstraint(
+            "synthetic_non_live = true",
+            name="ck_outcome_metric_version_synthetic_non_live",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    metric_definition_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("outcome_metric_definitions.id"), nullable=False, index=True
+    )
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    subject_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    subject_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    value_numeric: Mapped[float | None] = mapped_column(Float)
+    numerator_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    denominator_count: Mapped[int | None] = mapped_column(Integer)
+    availability_status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    coverage_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    included_business_event_ids: Mapped[list[str]] = mapped_column(
+        JSON,
+        default=list,
+        nullable=False,
+    )
+    excluded_event_rule_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    calculation_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    corrects_metric_version_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("outcome_metric_versions.id"), index=True
+    )
+    derivation_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    evidence_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("evidence.id"), nullable=False, index=True
+    )
+    synthetic_non_live: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class OutcomeEconomicLinkModel(BusinessScopedMixin, Base):
+    __tablename__ = "outcome_economic_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "metric_version_id",
+            "version_number",
+            name="uq_outcome_economic_link_metric_version_version",
+        ),
+        CheckConstraint(
+            "version_number >= 1",
+            name="ck_outcome_economic_link_version_positive",
+        ),
+        CheckConstraint(
+            (
+                "link_type in ('DIRECT_REVENUE', 'CONTRIBUTION_MARGIN', 'VALUE_PROXY', "
+                "'HYPOTHETICAL_PROXY', 'NONE')"
+            ),
+            name="ck_outcome_economic_link_type",
+        ),
+        CheckConstraint(
+            (
+                "downstream_outcome_class in ('QUALIFIED_INTENT', 'CTA_COMPLETION', 'LEAD', "
+                "'APPLICATION', 'BOOKING', 'CHECKOUT', 'PURCHASE_PAYMENT', 'REFUND', "
+                "'RENEWAL', 'RETENTION', 'REVENUE', 'COST', 'CONTRIBUTION_MARGIN')"
+            ),
+            name="ck_outcome_economic_link_class",
+        ),
+        CheckConstraint(
+            "epistemic_status in ('HYPOTHESIS', 'ASSUMPTION', 'UNKNOWN')",
+            name="ck_outcome_economic_link_epistemic_status",
+        ),
+        CheckConstraint(
+            "supports_go = false",
+            name="ck_outcome_economic_link_disabled_no_go",
+        ),
+        CheckConstraint(
+            "synthetic_non_live = true",
+            name="ck_outcome_economic_link_synthetic_non_live",
+        ),
+        CheckConstraint(
+            "hurdle_multiplier >= 1",
+            name="ck_outcome_economic_link_hurdle_positive",
+        ),
+        CheckConstraint(
+            "value_per_unit_cents is null or value_per_unit_cents >= 0",
+            name="ck_outcome_economic_link_value_nonnegative",
+        ),
+        CheckConstraint(
+            "direct_cost_cents is null or direct_cost_cents >= 0",
+            name="ck_outcome_economic_link_direct_cost_nonnegative",
+        ),
+        CheckConstraint(
+            "fully_loaded_execution_cost_cents is null or fully_loaded_execution_cost_cents >= 0",
+            name="ck_outcome_economic_link_execution_cost_nonnegative",
+        ),
+        CheckConstraint(
+            "opportunity_cost_cents is null or opportunity_cost_cents >= 0",
+            name="ck_outcome_economic_link_opportunity_nonnegative",
+        ),
+        CheckConstraint(
+            "bounded_downside_cents is null or bounded_downside_cents >= 0",
+            name="ck_outcome_economic_link_downside_nonnegative",
+        ),
+        CheckConstraint(
+            "expected_benefit_cents is null or expected_benefit_cents >= 0",
+            name="ck_outcome_economic_link_benefit_nonnegative",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    metric_version_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("outcome_metric_versions.id"), nullable=False, index=True
+    )
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    link_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    downstream_outcome_class: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    epistemic_status: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    value_per_unit_cents: Mapped[int | None] = mapped_column(Integer)
+    direct_cost_cents: Mapped[int | None] = mapped_column(Integer)
+    fully_loaded_execution_cost_cents: Mapped[int | None] = mapped_column(Integer)
+    opportunity_cost_cents: Mapped[int | None] = mapped_column(Integer)
+    bounded_downside_cents: Mapped[int | None] = mapped_column(Integer)
+    expected_benefit_cents: Mapped[int | None] = mapped_column(Integer)
+    hurdle_multiplier: Mapped[int] = mapped_column(Integer, nullable=False)
+    supports_go: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    evidence_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("evidence.id"), nullable=False, index=True
+    )
+    synthetic_non_live: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    limitations: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+
+
+class OutcomeExperimentProposalModel(BusinessScopedMixin, Base):
+    __tablename__ = "outcome_experiment_proposals"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('DRAFT', 'DISABLED_NON_LIVE', 'RETIRED')",
+            name="ck_outcome_experiment_proposal_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    metric_definition_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("outcome_metric_definitions.id"), nullable=False, index=True
+    )
+    metric_version_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("outcome_metric_versions.id"), nullable=False, index=True
+    )
+    economic_link_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("outcome_economic_links.id"), nullable=False, index=True
+    )
+    learning_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("learnings.id"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    hypothesis: Mapped[str] = mapped_column(Text, nullable=False)
+    selected_metric_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    eligible_population: Mapped[str] = mapped_column(Text, nullable=False)
+    treatment: Mapped[str] = mapped_column(Text, nullable=False)
+    control: Mapped[str] = mapped_column(Text, nullable=False)
+    success_threshold: Mapped[str] = mapped_column(Text, nullable=False)
+    weak_signal_threshold: Mapped[str] = mapped_column(Text, nullable=False)
+    failure_threshold: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    limitations: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)

@@ -68,3 +68,5 @@ jobs:
         run: python -m pytest -m telegram_execution tests/integration
       - name: Phase 6 Observation Learning PostgreSQL Redis
         run: python -m pytest -m phase6_learning tests/integration
+      - name: Business Outcome PostgreSQL
+        run: python -m pytest -m business_outcomes tests/integration
