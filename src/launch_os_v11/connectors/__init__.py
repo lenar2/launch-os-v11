@@ -1,4 +1,5 @@
-"""Connector boundary reserved for later phases.
+"""Provider connectors and provider-neutral capability contracts.
 
-Phase 1 intentionally does not implement Telegram, Instagram, GetCourse, payments, or CRM.
+All external writes remain governed by Launch OS execution policy. Connector modules
+receive typed commands only; they are not direct tools for AI agents.
 """
