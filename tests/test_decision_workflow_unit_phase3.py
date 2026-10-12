@@ -426,8 +426,7 @@ def test_invalid_specialist_output_is_retried_without_materializing_bad_run(engi
         ]
         contribution = session.scalar(
             select(models.SpecialistContributionModel).where(
-                models.SpecialistContributionModel.contract_key
-                == "ai.specialist.launch_strategist"
+                models.SpecialistContributionModel.contract_key == "ai.specialist.launch_strategist"
             )
         )
         assert contribution is not None
@@ -482,9 +481,7 @@ def test_failed_chief_run_is_retried_without_materializing_bad_run(engine) -> No
         assert workflow.status == DecisionWorkflowStatus.AWAITING_DECISION_APPROVAL.value
         chief_runs = session.scalars(
             select(models.AgentRunModel)
-            .where(
-                models.AgentRunModel.input_ref == f"decision_workflow:{workflow_id}:chief:v1"
-            )
+            .where(models.AgentRunModel.input_ref == f"decision_workflow:{workflow_id}:chief:v1")
             .order_by(models.AgentRunModel.created_at)
         ).all()
         assert [run.status for run in chief_runs] == [
@@ -555,10 +552,7 @@ def test_wrong_controller_identity_is_retried_without_materializing_bad_run(engi
             select(models.AgentRunModel)
             .where(
                 models.AgentRunModel.input_ref
-                == (
-                    f"decision_workflow:{workflow_id}:candidate:1:"
-                    "ai.controller.evidence"
-                )
+                == (f"decision_workflow:{workflow_id}:candidate:1:ai.controller.evidence")
             )
             .order_by(models.AgentRunModel.created_at)
         ).all()
@@ -636,10 +630,7 @@ def test_unscoped_controller_evidence_ref_is_retried_without_materializing_bad_r
             select(models.AgentRunModel)
             .where(
                 models.AgentRunModel.input_ref
-                == (
-                    f"decision_workflow:{workflow_id}:candidate:1:"
-                    "ai.controller.evidence"
-                )
+                == (f"decision_workflow:{workflow_id}:candidate:1:ai.controller.evidence")
             )
             .order_by(models.AgentRunModel.created_at)
         ).all()
@@ -815,6 +806,85 @@ def test_decision_approval_binds_exact_decision_version() -> None:
     assert not approval_matches_decision(approval, new_decision)
 
 
+def test_launch_workflow_routes_only_needed_instagram_pod(engine) -> None:
+    factory = create_session_factory(engine)
+    scope = _seed_business_graph_in_factory(factory, suffix="launch-pod-instagram")
+    queue = ListJobQueue()
+    clock = FixedClock(_now())
+    launch_id = "launch-launch-pod-instagram"
+
+    session = factory()
+    try:
+        with session.begin():
+            channel = session.get(models.ChannelModel, "channel-launch-pod-instagram")
+            assert channel is not None
+            channel.provider = "instagram"
+            channel.capabilities = {"post": True}
+            session.add(
+                models.CampaignModel(
+                    id="campaign-launch-pod-instagram",
+                    organization_id=scope.organization_id,
+                    business_id=scope.business_id,
+                    name="Instagram launch",
+                    goal_id="goal-launch-pod-instagram",
+                )
+            )
+            session.add(
+                models.LaunchModel(
+                    id=launch_id,
+                    organization_id=scope.organization_id,
+                    business_id=scope.business_id,
+                    campaign_id="campaign-launch-pod-instagram",
+                    offer_id="offer-launch-pod-instagram",
+                    goal_id="goal-launch-pod-instagram",
+                    channel_id="channel-launch-pod-instagram",
+                    status="ACTIVE",
+                )
+            )
+    finally:
+        session.close()
+
+    workflow_id = _start_workflow_in_factory(
+        factory,
+        scope=scope,
+        queue=queue,
+        clock=clock,
+        launch_id=launch_id,
+    )
+    worker = _phase3_worker(factory=factory, queue=queue, clock=clock, script=[])
+    result = worker.process_one_from_queue()
+    assert result is not None
+    assert result.status == "SUCCEEDED"
+
+    session = factory()
+    try:
+        keys = set(
+            session.scalars(
+                select(models.AgentRunModel.agent_contract_key).where(
+                    models.AgentRunModel.input_ref.like(
+                        f"decision_workflow:{workflow_id}:specialist:%"
+                    )
+                )
+            ).all()
+        )
+        assert keys == {
+            "ai.specialist.audience_intelligence",
+            "ai.specialist.revenue_funnel_strategist",
+            "ai.specialist.launch_strategist",
+            "ai.specialist.business_product_analyst",
+            "ai.specialist.offer_positioning_strategist",
+            "ai.specialist.experiment_lead",
+            "ai.specialist.instagram_strategist",
+            "ai.specialist.community_inbox_operator",
+            "ai.specialist.copy_chief",
+        }
+        assert "ai.specialist.tiktok_strategist" not in keys
+        assert "ai.specialist.youtube_strategist" not in keys
+        assert "ai.specialist.performance_strategist" not in keys
+    finally:
+        session.close()
+
+
 def _phase3_worker(
     *,
     factory: sessionmaker[Session],
@@ -851,6 +921,7 @@ def _start_workflow_in_factory(
     scope: TenantScope,
     queue: ListJobQueue,
     clock: FixedClock,
+    launch_id: str | None = None,
 ) -> str:
     session = factory()
     try:
@@ -866,6 +937,7 @@ def _start_workflow_in_factory(
                 context=context,
                 queue=queue,
                 clock=clock,
+                launch_id=launch_id,
             ).workflow.id
     finally:
         session.close()

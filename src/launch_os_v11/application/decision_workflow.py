@@ -11,10 +11,10 @@ from sqlalchemy.orm import Session
 
 from launch_os_v11.ai_runtime.context import ContextReference
 from launch_os_v11.ai_runtime.contracts import AgentRunStatus
+from launch_os_v11.ai_runtime.launch_pod import select_specialist_contract_keys
 from launch_os_v11.ai_runtime.registry import (
     CHIEF_GROWTH_PRODUCER_CONTRACT_KEY,
     REQUIRED_CONTROLLER_CONTRACT_KEYS,
-    SPECIALIST_CONTRACT_KEYS,
     AgentRegistry,
 )
 from launch_os_v11.ai_runtime.schemas import (
@@ -573,6 +573,16 @@ def _advance_workflow(
         return
 
 
+def _specialist_contract_keys(
+    session: Session,
+    workflow: DecisionWorkflowModel,
+) -> tuple[str, ...]:
+    snapshot = session.get(BusinessSnapshotModel, workflow.snapshot_id)
+    if snapshot is None:
+        raise PermanentJobError("BusinessSnapshot not found for specialist routing")
+    return select_specialist_contract_keys(snapshot.payload)
+
+
 def _ensure_specialist_runs(
     session: Session,
     *,
@@ -584,7 +594,7 @@ def _ensure_specialist_runs(
     service = AgentRunService(registry=registry, queue=queue, clock=clock)
     scope = TenantScope(organization_id=workflow.organization_id, business_id=workflow.business_id)
     not_ready_count = 0
-    for contract_key in SPECIALIST_CONTRACT_KEYS:
+    for contract_key in _specialist_contract_keys(session, workflow):
         run_state = _specialist_run_state(
             session,
             workflow=workflow,
@@ -659,8 +669,7 @@ def _ensure_chief_run(
             )
         )
     refs.extend(
-        ContextReference(object_type="controller_review", object_id=review.id)
-        for review in reviews
+        ContextReference(object_type="controller_review", object_id=review.id) for review in reviews
     )
     input_ref = _chief_run_input_ref(workflow=workflow, version=version)
     service.create_agent_run(
@@ -745,7 +754,7 @@ def _materialize_specialist_contributions(
     *,
     workflow: DecisionWorkflowModel,
 ) -> None:
-    for contract_key in SPECIALIST_CONTRACT_KEYS:
+    for contract_key in _specialist_contract_keys(session, workflow):
         existing = _specialist_contribution(session, workflow=workflow, contract_key=contract_key)
         if existing is not None:
             continue
@@ -808,10 +817,7 @@ def _specialist_run_state(
     runs = _specialist_agent_runs(session, workflow=workflow, contract_key=contract_key)
     if any(run.status in _PENDING_AGENT_RUN_STATUSES for run in runs):
         return "pending"
-    if any(
-        _specialist_run_can_materialize(session, workflow=workflow, run=run)
-        for run in runs
-    ):
+    if any(_specialist_run_can_materialize(session, workflow=workflow, run=run) for run in runs):
         return "ready"
     if len(runs) >= _MAX_SPECIALIST_OUTPUT_ATTEMPTS:
         raise PermanentJobError("SpecialistContribution output retry limit exceeded")
@@ -860,7 +866,7 @@ def _specialist_agent_runs(
 def _specialist_run_generation(session: Session, workflow: DecisionWorkflowModel) -> int:
     input_refs = [
         _specialist_run_input_ref(workflow=workflow, contract_key=contract_key)
-        for contract_key in SPECIALIST_CONTRACT_KEYS
+        for contract_key in _specialist_contract_keys(session, workflow)
     ]
     return int(
         session.scalar(
@@ -918,10 +924,7 @@ def _chief_run_state(
     runs = _chief_agent_runs(session, workflow=workflow, version=version)
     if any(run.status in _PENDING_AGENT_RUN_STATUSES for run in runs):
         return "pending"
-    if any(
-        _chief_run_can_materialize(session, workflow=workflow, run=run)
-        for run in runs
-    ):
+    if any(_chief_run_can_materialize(session, workflow=workflow, run=run) for run in runs):
         return "ready"
     if len(runs) >= _MAX_CHIEF_OUTPUT_ATTEMPTS:
         raise PermanentJobError("DecisionCandidate output retry limit exceeded")
@@ -959,7 +962,8 @@ def _chief_agent_runs(
                 AgentRunModel.business_id == workflow.business_id,
                 AgentRunModel.agent_contract_key == CHIEF_GROWTH_PRODUCER_CONTRACT_KEY,
                 AgentRunModel.agent_contract_version == 1,
-                AgentRunModel.input_ref == _chief_run_input_ref(
+                AgentRunModel.input_ref
+                == _chief_run_input_ref(
                     workflow=workflow,
                     version=version,
                 ),
@@ -982,7 +986,8 @@ def _chief_run_generation(
             .where(
                 AgentRunModel.organization_id == workflow.organization_id,
                 AgentRunModel.business_id == workflow.business_id,
-                AgentRunModel.input_ref == _chief_run_input_ref(
+                AgentRunModel.input_ref
+                == _chief_run_input_ref(
                     workflow=workflow,
                     version=version,
                 ),

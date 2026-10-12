@@ -4,6 +4,10 @@ from collections.abc import Iterable
 
 from launch_os_v11.ai_runtime.contracts import AgentAuthority, AgentContract, ModelCapability
 from launch_os_v11.ai_runtime.errors import AIContractError
+from launch_os_v11.ai_runtime.launch_pod import (
+    DEFAULT_SPECIALIST_CONTRACT_KEYS,
+    SPECIALIST_CONTRACT_SPECS,
+)
 from launch_os_v11.ai_runtime.schemas import (
     ControllerReviewOutput,
     DecisionCandidate,
@@ -11,11 +15,7 @@ from launch_os_v11.ai_runtime.schemas import (
     SpecialistContribution,
 )
 
-SPECIALIST_CONTRACT_KEYS = (
-    "ai.specialist.audience_intelligence",
-    "ai.specialist.revenue_funnel_strategist",
-    "ai.specialist.launch_strategist",
-)
+SPECIALIST_CONTRACT_KEYS = DEFAULT_SPECIALIST_CONTRACT_KEYS
 CHIEF_GROWTH_PRODUCER_CONTRACT_KEY = "ai.chief.growth_producer"
 REQUIRED_CONTROLLER_CONTRACT_KEYS = (
     "ai.controller.evidence",
@@ -93,31 +93,9 @@ def runtime_probe_contract() -> AgentContract:
 
 
 def specialist_contracts() -> tuple[AgentContract, ...]:
-    return (
-        _specialist_contract(
-            key="ai.specialist.audience_intelligence",
-            role_name="Audience Intelligence",
-            mission=(
-                "Analyze audience context, facts, hypotheses, unknowns, and risks for "
-                "the launch decision without selecting the final business action."
-            ),
-        ),
-        _specialist_contract(
-            key="ai.specialist.revenue_funnel_strategist",
-            role_name="Revenue/Funnel Strategist",
-            mission=(
-                "Analyze offer economics, funnel assumptions, and revenue constraints "
-                "without creating a final Decision."
-            ),
-        ),
-        _specialist_contract(
-            key="ai.specialist.launch_strategist",
-            role_name="Launch Strategist",
-            mission=(
-                "Analyze launch sequencing, channel fit, and reversible strategic "
-                "options without approving or executing anything."
-            ),
-        ),
+    return tuple(
+        _specialist_contract(key=key, role_name=role_name, mission=mission)
+        for key, role_name, mission in SPECIALIST_CONTRACT_SPECS
     )
 
 
