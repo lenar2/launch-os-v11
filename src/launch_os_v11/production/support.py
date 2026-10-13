@@ -8,12 +8,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from launch_os_v11.ai_runtime.contracts import AgentRunStatus
+from launch_os_v11.ai_runtime.launch_pod import LaunchPodPlan, build_launch_pod_plan
 from launch_os_v11.application.decision_workflow import approval_matches_decision
 from launch_os_v11.domain.scope import TenantScope
 from launch_os_v11.persistence.models import (
     ActionModel,
     AgentRunModel,
     AssetVersionModel,
+    BusinessSnapshotModel,
     DecisionApprovalModel,
     DecisionModel,
     EvidenceModel,
@@ -180,9 +182,7 @@ def _strategy(
     workflow: ProductionWorkflowModel,
 ) -> ContentStrategyModel:
     strategy = session.scalar(
-        select(ContentStrategyModel).where(
-            ContentStrategyModel.workflow_id == workflow.id
-        )
+        select(ContentStrategyModel).where(ContentStrategyModel.workflow_id == workflow.id)
     )
     if strategy is None:
         raise PermanentJobError("ProductionWorkflow ContentStrategy not found")
@@ -191,6 +191,26 @@ def _strategy(
         business_id=strategy.business_id,
     )
     return strategy
+
+
+def _production_plan(session: Session, workflow: ProductionWorkflowModel) -> LaunchPodPlan:
+    snapshot = session.get(BusinessSnapshotModel, workflow.snapshot_id)
+    if snapshot is None:
+        raise PermanentJobError("Production BusinessSnapshot missing")
+    _scope(workflow).assert_matches(
+        organization_id=snapshot.organization_id,
+        business_id=snapshot.business_id,
+    )
+    launch = snapshot.payload.get("launch")
+    if workflow.launch_id is not None and (
+        not isinstance(launch, dict) or launch.get("id") != workflow.launch_id
+    ):
+        raise PermanentJobError("production snapshot launch identity mismatch")
+    decision = _decision(session, workflow)
+    return build_launch_pod_plan(
+        snapshot.payload,
+        required_assets=tuple(decision.required_assets or ()),
+    )
 
 
 def _decision(
@@ -252,8 +272,7 @@ def _workflow_job(
             JobModel.organization_id == workflow.organization_id,
             JobModel.business_id == workflow.business_id,
             JobModel.job_type == JOB_TYPE_WORKFLOW_ADVANCE,
-            JobModel.idempotency_key
-            == f"production_workflow:{workflow.id}:advance:start",
+            JobModel.idempotency_key == f"production_workflow:{workflow.id}:advance:start",
         )
         .order_by(JobModel.created_at)
     )
@@ -262,7 +281,9 @@ def _workflow_job(
 def assert_phase4_no_external_execution(session: Session, scope: TenantScope) -> None:
     for model in (ActionModel, PublicationModel, ExecutionModel):
         count = session.scalar(
-            select(func.count()).select_from(model).where(
+            select(func.count())
+            .select_from(model)
+            .where(
                 model.organization_id == scope.organization_id,
                 model.business_id == scope.business_id,
             )

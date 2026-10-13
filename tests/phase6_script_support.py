@@ -10,6 +10,7 @@ def phase6_decision_script(
     evidence_id: str,
     *,
     selected_action: str,
+    launch_specific: bool = False,
 ) -> list[FakeAdapterScriptStep]:
     steps = [
         FakeAdapterScriptStep(
@@ -20,6 +21,15 @@ def phase6_decision_script(
             "Audience Intelligence",
             "Revenue/Funnel Strategist",
             "Launch Strategist",
+            *(
+                (
+                    "Business/Product Analyst",
+                    "Offer & Positioning Strategist",
+                    "Experiment Lead",
+                )
+                if launch_specific
+                else ()
+            ),
         )
     ]
     steps.append(

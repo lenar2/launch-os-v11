@@ -3,6 +3,11 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from launch_os_v11.ai_runtime.launch_pod import (
+    SHORT_FORM_SCRIPT_WRITER_CONTRACT_KEY,
+    TELEGRAM_WRITER_CONTRACT_KEY,
+    YOUTUBE_SCRIPT_WRITER_CONTRACT_KEY,
+)
 from launch_os_v11.ai_runtime.schemas import (
     AssetDraftProposal,
     ContentStrategyProposal,
@@ -31,6 +36,7 @@ from launch_os_v11.production.support import (
     _asset_version,
     _decision,
     _next_asset_version_number,
+    _production_plan,
     _validate_evidence_refs,
     _validated_output,
 )
@@ -38,6 +44,26 @@ from launch_os_v11.runtime.errors import PermanentJobError
 from launch_os_v11.runtime.security import assert_no_secrets
 
 ASSET_TYPE_TELEGRAM_POST_COPY = "TELEGRAM_POST_COPY"
+ASSET_TYPE_SHORT_FORM_SCRIPT = "SHORT_FORM_SCRIPT_DRAFT"
+ASSET_TYPE_YOUTUBE_SCRIPT = "YOUTUBE_SCRIPT_DRAFT"
+_WRITER_ASSETS = {
+    TELEGRAM_WRITER_CONTRACT_KEY: (ASSET_TYPE_TELEGRAM_POST_COPY, "Telegram launch post"),
+    SHORT_FORM_SCRIPT_WRITER_CONTRACT_KEY: (
+        ASSET_TYPE_SHORT_FORM_SCRIPT,
+        "Short-form script draft",
+    ),
+    YOUTUBE_SCRIPT_WRITER_CONTRACT_KEY: (
+        ASSET_TYPE_YOUTUBE_SCRIPT,
+        "YouTube script draft",
+    ),
+}
+
+
+def _asset_details(session: Session, workflow: ProductionWorkflowModel) -> tuple[str, str]:
+    writer = _production_plan(session, workflow).production_writer_key
+    if writer not in _WRITER_ASSETS:
+        raise PermanentJobError("unsupported launch channel for production")
+    return _WRITER_ASSETS[writer]
 
 
 def _materialize_content_strategy(
@@ -86,9 +112,7 @@ def _materialize_creative_brief(
     strategy: ContentStrategyModel,
 ) -> CreativeBriefModel:
     existing_detail = session.scalar(
-        select(CreativeBriefDetailModel).where(
-            CreativeBriefDetailModel.workflow_id == workflow.id
-        )
+        select(CreativeBriefDetailModel).where(CreativeBriefDetailModel.workflow_id == workflow.id)
     )
     if existing_detail is not None:
         brief = session.get(CreativeBriefModel, existing_detail.creative_brief_id)
@@ -101,15 +125,12 @@ def _materialize_creative_brief(
         organization_id=workflow.organization_id,
         business_id=workflow.business_id,
         decision_id=workflow.decision_id,
-        title="Telegram launch post",
+        title=_asset_details(session, workflow)[1],
         objective=proposal.objective,
         constraints=[
             *proposal.brand_constraints,
             *proposal.production_constraints,
-            *[
-                f"unsupported claim: {value}"
-                for value in proposal.forbidden_or_unsupported_claims
-            ],
+            *[f"unsupported claim: {value}" for value in proposal.forbidden_or_unsupported_claims],
         ],
     )
     session.add(brief)
@@ -163,6 +184,8 @@ def _materialize_asset_version(
         workflow,
         f"production_workflow:{workflow.id}:asset:v{version_number}",
     )
+    if run.agent_contract_key != _production_plan(session, workflow).production_writer_key:
+        raise PermanentJobError("writer run does not match frozen launch-channel contract")
     output = _validated_output(run, AssetDraftProposal, "asset draft")
     _validate_evidence_refs(session, workflow, output.evidence_refs)
     asset = _ensure_asset(session, workflow)
@@ -171,9 +194,7 @@ def _materialize_asset_version(
         "schema_version": 1,
         "origin": output.rights.origin,
         "writer_agent_run_id": run.id,
-        "claim_inventory": [
-            item.model_dump(mode="json") for item in output.claim_inventory
-        ],
+        "claim_inventory": [item.model_dump(mode="json") for item in output.claim_inventory],
         "evidence_refs": [item.model_dump(mode="json") for item in output.evidence_refs],
         "content_notes": list(output.content_notes),
     }
@@ -283,9 +304,7 @@ def _materialize_asset_reviews(
             issues=list(output.issues),
             required_changes=list(output.required_changes),
             conditions=conditions,
-            evidence_refs=[
-                item.model_dump(mode="json") for item in output.evidence_refs
-            ],
+            evidence_refs=[item.model_dump(mode="json") for item in output.evidence_refs],
             contract_key=run.agent_contract_key,
             contract_version=run.agent_contract_version,
             instruction_version=definition.instruction_version,
@@ -315,8 +334,8 @@ def _ensure_asset(session: Session, workflow: ProductionWorkflowModel) -> AssetM
         organization_id=workflow.organization_id,
         business_id=workflow.business_id,
         creative_brief_id=workflow.creative_brief_id,
-        asset_type=ASSET_TYPE_TELEGRAM_POST_COPY,
-        title="Telegram launch post",
+        asset_type=_asset_details(session, workflow)[0],
+        title=_asset_details(session, workflow)[1],
     )
     session.add(asset)
     session.flush()

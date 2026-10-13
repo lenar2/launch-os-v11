@@ -10,11 +10,11 @@ from launch_os_v11.persistence.production_models import AssetReviewModel, Produc
 from launch_os_v11.production.registry import (
     CONTENT_DIRECTOR_CONTRACT_KEY,
     REQUIRED_ASSET_CONTROLLER_CONTRACT_KEYS,
-    TELEGRAM_WRITER_CONTRACT_KEY,
 )
 from launch_os_v11.production.support import (
     _decision,
     _next_asset_version_number,
+    _production_plan,
     _rights_for_version,
     _scope,
     _strategy,
@@ -86,18 +86,18 @@ def _ensure_writer_run(
         ),
     ]
     if previous_version is not None:
-        refs.append(
-            ContextReference(object_type="asset_version", object_id=previous_version.id)
-        )
+        refs.append(ContextReference(object_type="asset_version", object_id=previous_version.id))
     refs.extend(
-        ContextReference(object_type="asset_review", object_id=review.id)
-        for review in reviews
+        ContextReference(object_type="asset_review", object_id=review.id) for review in reviews
     )
+    writer = _production_plan(session, workflow).production_writer_key
+    if writer is None:
+        raise PermanentJobError("no governed writer is available for this launch channel")
     service = AgentRunService(registry=registry, queue=queue, clock=clock)
     service.create_agent_run(
         session,
         scope=_scope(workflow),
-        contract_key=TELEGRAM_WRITER_CONTRACT_KEY,
+        contract_key=writer,
         contract_version=1,
         input_ref=f"production_workflow:{workflow.id}:asset:v{version}",
         context_refs=tuple(refs),

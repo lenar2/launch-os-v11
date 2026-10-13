@@ -26,6 +26,7 @@ from launch_os_v11.production.support import (
     _enqueue_advance,
     _latest_asset_version,
     _next_asset_version_number,
+    _production_plan,
 )
 from launch_os_v11.runtime.clock import Clock
 from launch_os_v11.runtime.contracts import RuntimeJobContext
@@ -192,6 +193,9 @@ def _advance_production_workflow(
             return
         workflow.status = ProductionWorkflowStatus.PRODUCTION_READY.value
         workflow.final_asset_version_id = asset_version.id
-        workflow.status = ProductionWorkflowStatus.READY_FOR_ACTION_PROPOSAL.value
+        if _production_plan(session, workflow).production_writer_key == (
+            "ai.production.telegram_writer"
+        ):
+            workflow.status = ProductionWorkflowStatus.READY_FOR_ACTION_PROPOSAL.value
         session.flush()
         return

@@ -200,7 +200,7 @@ _RETENTION_TERMS = {
 @dataclass(frozen=True)
 class LaunchPodPlan:
     decision_specialist_keys: tuple[str, ...]
-    production_writer_key: str
+    production_writer_key: str | None
     production_support_keys: tuple[str, ...]
 
 
@@ -210,8 +210,13 @@ def build_launch_pod_plan(
     required_assets: tuple[str, ...] = (),
 ) -> LaunchPodPlan:
     provider = _launch_provider(snapshot_payload)
-    writer_key = TELEGRAM_WRITER_CONTRACT_KEY
-    if provider in _SHORT_FORM_PROVIDERS:
+    writer_key: str | None = None
+    if not isinstance(snapshot_payload.get("launch"), Mapping) or provider in {
+        "telegram",
+        "manual",
+    }:
+        writer_key = TELEGRAM_WRITER_CONTRACT_KEY
+    elif provider in _SHORT_FORM_PROVIDERS:
         writer_key = SHORT_FORM_SCRIPT_WRITER_CONTRACT_KEY
     elif provider == "youtube":
         writer_key = YOUTUBE_SCRIPT_WRITER_CONTRACT_KEY

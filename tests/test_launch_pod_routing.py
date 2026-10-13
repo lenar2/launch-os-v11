@@ -164,3 +164,13 @@ def test_phase3_and_phase4_registries_keep_authorities_separate() -> None:
     assert SHORT_FORM_SCRIPT_WRITER_CONTRACT_KEY in phase4_keys
     assert YOUTUBE_SCRIPT_WRITER_CONTRACT_KEY in phase4_keys
     assert CREATIVE_DIRECTOR_CONTRACT_KEY in phase4_keys
+
+
+def test_unsupported_social_channel_never_falls_back_to_telegram_production() -> None:
+    for provider in ("linkedin", "pinterest", "unknown-network"):
+        plan = build_launch_pod_plan(_snapshot(provider=provider))
+        assert plan.production_writer_key is None
+    # Legacy non-launch production remains compatible with existing Phase 4.
+    assert build_launch_pod_plan(_snapshot()).production_writer_key == (
+        "ai.production.telegram_writer"
+    )

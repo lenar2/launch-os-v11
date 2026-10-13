@@ -28,11 +28,25 @@ def seed_approved_decision(
     factory: sessionmaker[Session],
     *,
     now: datetime,
+    launch_provider: str | None = None,
+    required_assets: tuple[str, ...] = (),
 ) -> Seed:
     session = factory()
     try:
         with session.begin():
             scope, user, evidence, snapshot = _seed_business_context(session, now=now)
+            if launch_provider is not None:
+                snapshot.payload = {
+                    **snapshot.payload,
+                    "launch": {"id": "scenario-launch", "channel_id": "scenario-channel"},
+                    "channels": [
+                        {
+                            "id": "scenario-channel",
+                            "provider": launch_provider,
+                            "capabilities": {"external_write": False},
+                        }
+                    ],
+                }
             decision = _seed_approved_phase3_chain(
                 session,
                 scope=scope,
@@ -41,6 +55,8 @@ def seed_approved_decision(
                 snapshot=snapshot,
                 now=now,
             )
+            if required_assets:
+                decision.required_assets = list(required_assets)
             return Seed(scope=scope, decision_id=decision.id, evidence_id=evidence.id)
     finally:
         session.close()
@@ -239,11 +255,13 @@ def _seed_approved_phase3_chain(
         schema_version=1,
         selected_action="Publish a concise Telegram launch post",
         payload={"why": ["Audience requested concise format"]},
-        evidence_refs=[{
-            "evidence_id": evidence.id,
-            "epistemic_status": EpistemicStatus.FACT.value,
-            "note": "Owner-provided audience signal",
-        }],
+        evidence_refs=[
+            {
+                "evidence_id": evidence.id,
+                "epistemic_status": EpistemicStatus.FACT.value,
+                "note": "Owner-provided audience signal",
+            }
+        ],
         specialist_contribution_ids=[],
         controller_review_ids=[],
         context_hash="b" * 64,

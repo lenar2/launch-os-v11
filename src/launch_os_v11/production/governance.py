@@ -24,8 +24,7 @@ def governed_asset_outcome(
     reviews: tuple[AssetReviewModel, ...],
 ) -> ControllerVerdict:
     expected = {
-        key.removeprefix("ai.controller.asset_")
-        for key in REQUIRED_ASSET_CONTROLLER_CONTRACT_KEYS
+        key.removeprefix("ai.controller.asset_") for key in REQUIRED_ASSET_CONTROLLER_CONTRACT_KEYS
     }
     present = {review.controller_type for review in reviews}
     missing = expected - present
@@ -91,8 +90,10 @@ def _has_unsupported_claims(
             except Exception:
                 return True
     lowered = asset_version.body.lower()
-    risky_markers = ("guaranteed", "guarantee", "100%", "testimonial", "everyone gets")
-    return any(marker in lowered for marker in risky_markers) and not declared_refs
+    # Unsupported absolute promises are not made factual by unrelated evidence refs.
+    if any(marker in lowered for marker in ("guaranteed", "guarantee", "everyone gets")):
+        return True
+    return "100%" in lowered and not declared_refs
 
 
 def _rights_are_complete(

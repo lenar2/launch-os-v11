@@ -83,9 +83,7 @@ def _database_url() -> str:
 
 
 def _redis_url() -> str:
-    value = os.environ.get("LAUNCH_OS_TEST_REDIS_URL") or os.environ.get(
-        "LAUNCH_OS_REDIS_URL"
-    )
+    value = os.environ.get("LAUNCH_OS_TEST_REDIS_URL") or os.environ.get("LAUNCH_OS_REDIS_URL")
     if not value:
         pytest.skip("LAUNCH_OS_TEST_REDIS_URL or LAUNCH_OS_REDIS_URL is required")
     return value
@@ -95,9 +93,7 @@ def _clear_test_database(database_url: str) -> None:
     engine = create_engine(database_url, future=True)
     try:
         tables = [
-            table
-            for table in inspect(engine).get_table_names()
-            if table != "alembic_version"
+            table for table in inspect(engine).get_table_names() if table != "alembic_version"
         ]
         if not tables:
             return
@@ -424,9 +420,7 @@ def _seed_launch(factory: sessionmaker[Session], *, now: datetime) -> Seed:
             )
             session.add(owner)
             session.flush()
-            session.add_all(
-                [membership, goal, product, launch_channel, source]
-            )
+            session.add_all([membership, goal, product, launch_channel, source])
             session.flush()
             offer = models.OfferModel(
                 id="phase6-offer",
@@ -515,6 +509,7 @@ def _create_and_approve_phase6_decision(
         script=phase6_decision_script(
             seed.evidence_id,
             selected_action="Publish one bounded Phase 6 Telegram test",
+            launch_specific=True,
         )
     )
     worker = _worker(
@@ -532,7 +527,7 @@ def _create_and_approve_phase6_decision(
         workflow_id=workflow_id,
         status=DecisionWorkflowStatus.AWAITING_DECISION_APPROVAL,
     )
-    assert adapter.call_count == 11
+    assert adapter.call_count == 14
 
     session = factory()
     try:
@@ -724,8 +719,7 @@ def _publish_and_start_observation(
 
         experiment = session.scalar(
             select(models.ExperimentModel).where(
-                models.ExperimentModel.decision_id
-                == production_workflow.decision_id
+                models.ExperimentModel.decision_id == production_workflow.decision_id
             )
         )
         assert experiment is not None
@@ -816,11 +810,14 @@ def _assert_late_event_time(
 def _assert_duplicate_delivery_is_idempotent(factory: sessionmaker[Session]) -> None:
     session = factory()
     try:
-        assert session.scalar(
-            select(func.count())
-            .select_from(ConnectorObservationModel)
-            .where(ConnectorObservationModel.provider_event_identity == "101")
-        ) == 1
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(ConnectorObservationModel)
+                .where(ConnectorObservationModel.provider_event_identity == "101")
+            )
+            == 1
+        )
         events = session.scalars(
             select(models.BusinessEventModel).where(
                 models.BusinessEventModel.event_type == "telegram.message_reaction"
@@ -874,9 +871,7 @@ def _assert_learning(
         assert result is not None
         assert result.result_class == "SUCCESS"
         learning_detail = session.scalar(
-            select(LearningDetailModel).where(
-                LearningDetailModel.experiment_result_id == result.id
-            )
+            select(LearningDetailModel).where(LearningDetailModel.experiment_result_id == result.id)
         )
         assert learning_detail is not None
         learning = session.get(models.LearningModel, learning_detail.learning_id)

@@ -46,6 +46,7 @@ from launch_os_v11.persistence.execution_models import (
 from launch_os_v11.persistence.models import (
     ActionModel,
     ApprovalModel,
+    AssetModel,
     AssetVersionModel,
     AuditLogModel,
     BusinessMembershipModel,
@@ -57,6 +58,7 @@ from launch_os_v11.persistence.models import (
     PublicationModel,
 )
 from launch_os_v11.persistence.production_models import ProductionWorkflowModel
+from launch_os_v11.production.materialization import ASSET_TYPE_TELEGRAM_POST_COPY
 from launch_os_v11.production.status import ProductionWorkflowStatus
 from launch_os_v11.runtime.clock import Clock
 from launch_os_v11.runtime.contracts import (
@@ -129,9 +131,7 @@ def probe_and_register_telegram_connector(
     account.write_capability = readiness.write_capability
     account.capabilities = dict(readiness.capabilities)
     account.status = (
-        "READY"
-        if readiness.auth_healthy and readiness.write_capability
-        else "UNAVAILABLE"
+        "READY" if readiness.auth_healthy and readiness.write_capability else "UNAVAILABLE"
     )
     account.last_checked_at = clock.now()
     account.last_error_class = readiness.error_class
@@ -198,6 +198,15 @@ def create_action_proposal(
         organization_id=asset_version.organization_id,
         business_id=asset_version.business_id,
     )
+    asset = session.get(AssetModel, asset_version.asset_id)
+    if asset is None:
+        raise PermanentJobError("action asset missing")
+    scope.assert_matches(
+        organization_id=asset.organization_id,
+        business_id=asset.business_id,
+    )
+    if asset.asset_type != ASSET_TYPE_TELEGRAM_POST_COPY:
+        raise PermanentJobError("Telegram execution cannot publish non-Telegram draft assets")
     account = session.get(ConnectorAccountModel, connector_account_id)
     if account is None:
         raise PermanentJobError(f"ConnectorAccount not found: {connector_account_id}")
@@ -205,6 +214,8 @@ def create_action_proposal(
         organization_id=account.organization_id,
         business_id=account.business_id,
     )
+    if account.provider != "telegram":
+        raise PermanentJobError("Telegram action proposal requires Telegram connector")
 
     payload: dict[str, object] = {
         "text": asset_version.body,
@@ -405,9 +416,7 @@ def approve_action_proposal(
         )
 
     action.status = ActionStatus.APPROVED.value
-    execution = session.scalar(
-        select(ExecutionModel).where(ExecutionModel.action_id == action.id)
-    )
+    execution = session.scalar(select(ExecutionModel).where(ExecutionModel.action_id == action.id))
     if execution is None:
         execution = ExecutionModel(
             id=new_id(),
@@ -579,9 +588,7 @@ class TelegramExecutionHandler:
         command = TelegramPublishTextCommand(
             chat_id=detail.target_chat_id,
             text=text,
-            disable_notification=bool(
-                detail.delivery_payload.get("disable_notification", False)
-            ),
+            disable_notification=bool(detail.delivery_payload.get("disable_notification", False)),
             protect_content=bool(detail.delivery_payload.get("protect_content", False)),
         )
         execution.status = ExecutionStatus.RUNNING.value
@@ -678,9 +685,7 @@ class TelegramExecutionHandler:
             )
         )
         experiment = session.scalar(
-            select(ExperimentModel).where(
-                ExperimentModel.decision_id == detail.decision_id
-            )
+            select(ExperimentModel).where(ExperimentModel.decision_id == detail.decision_id)
         )
         if experiment is not None:
             experiment.status = ExperimentStatus.RUNNING.value
@@ -817,14 +822,9 @@ def _preflight_block_reason(
     if account.target_chat_id != detail.target_chat_id:
         return "connector_target_changed"
     experiment = session.scalar(
-        select(ExperimentModel).where(
-            ExperimentModel.decision_id == detail.decision_id
-        )
+        select(ExperimentModel).where(ExperimentModel.decision_id == detail.decision_id)
     )
-    if (
-        experiment is not None
-        and experiment.status != ExperimentStatus.DRAFT.value
-    ):
+    if experiment is not None and experiment.status != ExperimentStatus.DRAFT.value:
         return "experiment_not_draft"
     if _payload_hash(detail.delivery_payload) != detail.delivery_payload_hash:
         return "action_payload_hash_mismatch"
@@ -936,9 +936,7 @@ def _channel_for_scope(
 
 def _action_detail(session: Session, action_id: str) -> ActionProposalDetailModel:
     detail = session.scalar(
-        select(ActionProposalDetailModel).where(
-            ActionProposalDetailModel.action_id == action_id
-        )
+        select(ActionProposalDetailModel).where(ActionProposalDetailModel.action_id == action_id)
     )
     if detail is None:
         raise PermanentJobError("ActionProposal detail not found")
@@ -947,9 +945,7 @@ def _action_detail(session: Session, action_id: str) -> ActionProposalDetailMode
 
 def _permission_evaluation(session: Session, action_id: str) -> PermissionEvaluationModel:
     evaluation = session.scalar(
-        select(PermissionEvaluationModel).where(
-            PermissionEvaluationModel.action_id == action_id
-        )
+        select(PermissionEvaluationModel).where(PermissionEvaluationModel.action_id == action_id)
     )
     if evaluation is None:
         raise PermanentJobError("Permission evaluation not found")
