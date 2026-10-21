@@ -72,7 +72,17 @@ class LaunchRoomRuntime:
         return cls.open(f"sqlite+pysqlite:///{path.resolve()}")
 
     @classmethod
-    def open(cls, database_url: str) -> LaunchRoomRuntime:
+    def open(cls, database_url: str, *, environment: str = "local") -> LaunchRoomRuntime:
+        if environment not in {"local", "test"}:
+            raise ProductError(
+                "production_isolated",
+                "Launch Room demonstration is not available outside local and test.",
+            )
+        if not database_url.startswith("sqlite"):
+            raise ProductError(
+                "production_isolated",
+                "Launch Room demonstration cannot attach to a non-local database.",
+            )
         connect_args = {"check_same_thread": False}
         engine_kwargs: dict[str, object] = {"future": True, "connect_args": connect_args}
         if database_url.endswith(":memory:"):

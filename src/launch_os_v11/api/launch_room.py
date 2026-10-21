@@ -1,26 +1,85 @@
-"""Local Launch Room HTTP surface. It does not publish and does not call a model provider."""
+"""Local Launch Room HTTP surface.
+
+Mounted only for an explicit local or test runtime. A client-supplied user id
+is never accepted as identity. The operator is the one this process created
+when it opened the launch.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from urllib.parse import parse_qsl
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from launch_os_v11.domain.scope import TenantScope
+from launch_os_v11.product.access import TrustedOperator
 from launch_os_v11.product.errors import ProductError
 from launch_os_v11.product.page import render_error, render_home, render_room
+from launch_os_v11.product.projection import LaunchRoomView
 from launch_os_v11.product.room import LaunchRoomService
 from launch_os_v11.product.runtime import LaunchRoomRuntime
 
 router = APIRouter()
+_CLIENT_IDENTITY_KEYS = {"actor_user_id", "owner_user_id", "user_id"}
 
 
 def _service(request: Request) -> LaunchRoomService:
     runtime = getattr(request.app.state, "launch_room", None)
     if not isinstance(runtime, LaunchRoomRuntime):
-        runtime = LaunchRoomRuntime.local_file()
-        request.app.state.launch_room = runtime
+        raise ProductError("not_authorized", "Launch Room is not mounted on this process.")
     return LaunchRoomService(runtime)
+
+
+def _operators(request: Request) -> dict[str, TrustedOperator]:
+    current = getattr(request.app.state, "launch_room_operators", None)
+    if not isinstance(current, dict):
+        current = {}
+        request.app.state.launch_room_operators = current
+    return current
+
+
+def _bind(request: Request, view: LaunchRoomView) -> None:
+    _operators(request)[view.launch_id] = TrustedOperator(
+        user_id=view.owner_user_id,
+        scope=TenantScope(
+            organization_id=view.organization_id,
+            business_id=view.business_id,
+        ),
+    )
+
+
+def _bound(request: Request, launch_id: str) -> TrustedOperator:
+    operator = _operators(request).get(launch_id)
+    if operator is None:
+        raise ProductError(
+            "not_authorized",
+            "This process has no trusted operator for that launch.",
+        )
+    return operator
+
+
+def _reject_client_identity(payload: Mapping[str, object]) -> None:
+    if any(key in payload for key in _CLIENT_IDENTITY_KEYS):
+        raise ProductError(
+            "identity_untrusted",
+            "A client-supplied user id is not a trusted server identity.",
+        )
+
+
+def _public(view: LaunchRoomView) -> dict[str, object]:
+    payload = view.to_dict()
+    payload.pop("owner_user_id", None)
+    return payload
+
+
+def _status(exc: ProductError) -> int:
+    if exc.code == "identity_untrusted":
+        return 403
+    if exc.code in {"not_found", "not_authorized", "scope_violation"}:
+        return 404
+    return 409
 
 
 async def _form(request: Request) -> dict[str, str]:
@@ -37,6 +96,7 @@ def launch_room_home() -> str:
 async def launch_room_open(request: Request) -> RedirectResponse | HTMLResponse:
     form = await _form(request)
     try:
+        _reject_client_identity(form)
         view = _service(request).open_launch(
             business_name=form.get("business_name", ""),
             goal=form.get("goal", ""),
@@ -45,17 +105,19 @@ async def launch_room_open(request: Request) -> RedirectResponse | HTMLResponse:
             known_fact=form.get("known_fact") or None,
             timezone=form.get("timezone") or "UTC",
         )
+        _bind(request, view)
     except ProductError as exc:
-        return HTMLResponse(render_error(str(exc)), status_code=400)
+        return HTMLResponse(render_error(str(exc)), status_code=_status(exc))
     return RedirectResponse(f"/launch-room/{view.launch_id}", status_code=303)
 
 
 @router.get("/launch-room/{launch_id}", response_class=HTMLResponse)
 def launch_room_page(request: Request, launch_id: str) -> HTMLResponse:
     try:
-        view = _service(request).get_room(launch_id)
+        operator = _bound(request, launch_id)
+        view = _service(request).get_room(launch_id, operator=operator)
     except ProductError as exc:
-        return HTMLResponse(render_error(str(exc)), status_code=404)
+        return HTMLResponse(render_error(str(exc)), status_code=_status(exc))
     return HTMLResponse(render_room(view))
 
 
@@ -66,29 +128,12 @@ async def launch_room_action(
     action: str,
 ) -> RedirectResponse | HTMLResponse:
     form = await _form(request)
-    service = _service(request)
     try:
-        if action == "decision":
-            service.run_team_decision(launch_id)
-        elif action == "revision":
-            service.request_revision(
-                launch_id,
-                form.get("note", ""),
-                actor_user_id=form.get("actor_user_id", ""),
-            )
-        elif action == "approve":
-            service.approve(launch_id, actor_user_id=form.get("actor_user_id", ""))
-        elif action == "materials":
-            service.prepare_materials(launch_id)
-        elif action == "note":
-            service.record_manual_note(launch_id, form.get("note", ""))
-        elif action == "adapt":
-            service.adapt(launch_id)
-        else:
-            raise ProductError("not_found", "Unknown room action.")
+        _reject_client_identity(form)
+        view = _perform(request, launch_id, action, form)
     except ProductError as exc:
-        status = 404 if exc.code == "not_found" else 409
-        return HTMLResponse(render_error(str(exc)), status_code=status)
+        return HTMLResponse(render_error(str(exc)), status_code=_status(exc))
+    del view
     return RedirectResponse(f"/launch-room/{launch_id}", status_code=303)
 
 
@@ -101,6 +146,7 @@ async def api_open(request: Request) -> JSONResponse:
             status_code=400,
         )
     try:
+        _reject_client_identity(payload)
         view = _service(request).open_launch(
             business_name=str(payload.get("business_name", "")),
             goal=str(payload.get("goal", "")),
@@ -109,18 +155,19 @@ async def api_open(request: Request) -> JSONResponse:
             known_fact=_optional_str(payload.get("known_fact")),
             timezone=str(payload.get("timezone") or "UTC"),
         )
+        _bind(request, view)
     except ProductError as exc:
-        return JSONResponse({"code": exc.code, "message": str(exc)}, status_code=400)
-    return JSONResponse(view.to_dict())
+        return JSONResponse({"code": exc.code, "message": str(exc)}, status_code=_status(exc))
+    return JSONResponse(_public(view))
 
 
 @router.get("/api/launch-room/{launch_id}")
 def api_get(request: Request, launch_id: str) -> JSONResponse:
     try:
-        return JSONResponse(_service(request).get_room(launch_id).to_dict())
+        operator = _bound(request, launch_id)
+        return JSONResponse(_public(_service(request).get_room(launch_id, operator=operator)))
     except ProductError as exc:
-        status = 404 if exc.code == "not_found" else 409
-        return JSONResponse({"code": exc.code, "message": str(exc)}, status_code=status)
+        return JSONResponse({"code": exc.code, "message": str(exc)}, status_code=_status(exc))
 
 
 @router.post("/api/launch-room/{launch_id}/{action}")
@@ -128,32 +175,47 @@ async def api_action(request: Request, launch_id: str, action: str) -> JSONRespo
     payload = await request.json()
     if not isinstance(payload, dict):
         payload = {}
-    service = _service(request)
     try:
-        if action == "decision":
-            view = service.run_team_decision(launch_id)
-        elif action == "revision":
-            view = service.request_revision(
-                launch_id,
-                str(payload.get("note", "")),
-                actor_user_id=str(payload.get("actor_user_id", "")),
-            )
-        elif action == "approve":
-            view = service.approve(launch_id, actor_user_id=str(payload.get("actor_user_id", "")))
-        elif action == "materials":
-            view = service.prepare_materials(launch_id)
-        elif action == "note":
-            view = service.record_manual_note(launch_id, str(payload.get("note", "")))
-        elif action == "message":
-            view = service.record_untrusted_message(launch_id, str(payload.get("message", "")))
-        elif action == "adapt":
-            view = service.adapt(launch_id)
-        else:
-            raise ProductError("not_found", "Unknown room action.")
+        _reject_client_identity(payload)
+        view = _perform(request, launch_id, action, payload)
     except ProductError as exc:
-        status = 404 if exc.code == "not_found" else 409
-        return JSONResponse({"code": exc.code, "message": str(exc)}, status_code=status)
-    return JSONResponse(view.to_dict())
+        return JSONResponse({"code": exc.code, "message": str(exc)}, status_code=_status(exc))
+    return JSONResponse(_public(view))
+
+
+def _perform(
+    request: Request,
+    launch_id: str,
+    action: str,
+    payload: Mapping[str, object],
+) -> LaunchRoomView:
+    service = _service(request)
+    operator = _bound(request, launch_id)
+    note = _text(payload, "note")
+    if action == "decision":
+        return service.run_team_decision(launch_id, operator=operator)
+    if action == "revision":
+        return service.request_revision(launch_id, note, operator=operator)
+    if action == "approve":
+        return service.approve(launch_id, operator=operator)
+    if action == "materials":
+        return service.prepare_materials(launch_id, operator=operator)
+    if action == "note":
+        return service.record_manual_note(launch_id, note, operator=operator)
+    if action == "message":
+        return service.record_untrusted_message(
+            launch_id,
+            _text(payload, "message"),
+            operator=operator,
+        )
+    if action == "adapt":
+        return service.adapt(launch_id, operator=operator)
+    raise ProductError("not_found", "Unknown room action.")
+
+
+def _text(payload: Mapping[str, object], key: str) -> str:
+    value = payload.get(key, "")
+    return value if isinstance(value, str) else ""
 
 
 def _optional_str(value: object) -> str | None:

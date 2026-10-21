@@ -34,17 +34,17 @@ First build target:
 
 Do not expand broad modules until this loop closes in staging.
 
-Run the local Launch Room, which walks one owner scenario on the real decision,
-production, approval, and observation contracts. Draft text is a labeled
-synthetic script, not a live model. Nothing is published.
+The in-process demonstration walks one owner scenario on the real decision,
+production, approval, and observation contracts. The owner is created by that
+process. Draft text is a labeled synthetic script, not a live model. Nothing
+is published.
 
 `PYTHON=python3.11 python -m launch_os_v11.product`
 
-`PYTHON=python3.11 make run-api`
-
-Then open `/launch-room` on that local process. The room refuses human-worth
-judgments, keeps missing metrics as UNKNOWN, and does not treat a chat-style
-"publish" message as authority.
+HTTP Launch Room routes are mounted only when a local or test app is given an
+explicit runtime. They are absent in staging and production. A request field
+named `owner_user_id` or `actor_user_id` is rejected. `make run-api` stays the
+health server and does not publish the room.
 
 ## Development
 

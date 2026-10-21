@@ -48,7 +48,6 @@ def render_room(view: LaunchRoomView) -> str:
     decision = escape(view.decision or "Not decided yet.")
     material = escape(view.material_body or "No draft yet.")
     action = view.launch_id
-    owner = escape(view.owner_user_id)
     body = f"""
     <p class="banner">Model intelligence: {escape(view.model_intelligence)}.
     Generation: {escape(view.generation_provenance)}.
@@ -70,11 +69,8 @@ def render_room(view: LaunchRoomView) -> str:
     <p>{escape(view.adaptation_statement)}</p></section>
     <div class="actions">
       {_post(action, "decision", "Ask the team")}
-      {_post(action, "revision", "Request a revision", note=True, owner=owner)}
-      <form method="post" action="/launch-room/{action}/approve">
-        <input type="hidden" name="actor_user_id" value="{owner}">
-        <button type="submit">Approve decision, do not publish</button>
-      </form>
+      {_post(action, "revision", "Request a revision", note=True)}
+      {_post(action, "approve", "Approve decision, do not publish")}
       {_post(action, "materials", "Prepare the draft")}
       {_post(action, "note", "Record a note, not a metric", note=True)}
       {_post(action, "adapt", "Adapt without a measured result")}
@@ -97,24 +93,16 @@ def render_error(message: str) -> str:
     )
 
 
-def _post(
-    launch_id: str,
-    action: str,
-    label: str,
-    *,
-    note: bool = False,
-    owner: str = "",
-) -> str:
+def _post(launch_id: str, action: str, label: str, *, note: bool = False) -> str:
     field = (
         '<input name="note" required '
         'placeholder="What should change? Not a publish command.">'
         if note
         else ""
     )
-    hidden = f'<input type="hidden" name="actor_user_id" value="{owner}">' if owner else ""
     return (
         f'<form method="post" action="/launch-room/{launch_id}/{action}">'
-        f"{hidden}{field}<button type='submit'>{escape(label)}</button></form>"
+        f"{field}<button type='submit'>{escape(label)}</button></form>"
     )
 
 

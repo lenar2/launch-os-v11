@@ -34,6 +34,7 @@ from launch_os_v11.application.decision_workflow import (
     start_decision_workflow,
 )
 from launch_os_v11.domain.enums import EpistemicStatus, SourceTrust
+from launch_os_v11.domain.exceptions import TenantScopeViolation
 from launch_os_v11.domain.ids import new_id
 from launch_os_v11.domain.scope import TenantScope
 from launch_os_v11.domain.time import utc_now
@@ -54,6 +55,7 @@ from launch_os_v11.persistence.models import (
 )
 from launch_os_v11.persistence.phase6_models import MetricVersionModel
 from launch_os_v11.persistence.production_models import ProductionWorkflowModel
+from launch_os_v11.product.access import TrustedOperator
 from launch_os_v11.product.errors import ProductError
 from launch_os_v11.product.projection import LaunchRoomView, project_launch_room
 from launch_os_v11.product.runtime import LaunchRoomRuntime
@@ -108,7 +110,7 @@ class LaunchRoomService:
         audience_value = audience.strip() if isinstance(audience, str) else ""
         fact_value = known_fact.strip() if isinstance(known_fact, str) else ""
 
-        def work(session: Session) -> str:
+        def work(session: Session) -> LaunchRoomView:
             organization = create_organization(session, name=f"{business_name.strip()} org")
             business = create_business(
                 session,
@@ -265,27 +267,40 @@ class LaunchRoomService:
             ).record
             launch.snapshot_id = snapshot.id
             session.flush()
-            return launch.id
+            return project_launch_room(session, launch.id)
 
-        return self.get_room(self._write(work))
+        return self._write(work)
 
-    def get_room(self, launch_id: str, *, scope: TenantScope | None = None) -> LaunchRoomView:
-        return self._write(lambda session: project_launch_room(session, launch_id, scope=scope))
+    def get_room(self, launch_id: str, *, operator: TrustedOperator) -> LaunchRoomView:
+        def work(session: Session) -> LaunchRoomView:
+            launch = _launch(session, launch_id)
+            _authorize(session, launch, operator)
+            return project_launch_room(session, launch_id, scope=operator.scope)
 
-    def run_team_decision(self, launch_id: str) -> LaunchRoomView:
-        facts, should_run = self._write(lambda session: self._prepare_decision(session, launch_id))
+        return self._write(work)
+
+    def run_team_decision(self, launch_id: str, *, operator: TrustedOperator) -> LaunchRoomView:
+        facts, should_run = self._write(
+            lambda session: self._prepare_decision(session, launch_id, operator)
+        )
         if should_run and facts is not None:
             self._runtime.drain(facts)
-            self._assert_decision_ready(launch_id)
-        return self.get_room(launch_id)
+            self._assert_decision_ready(launch_id, operator)
+        return self.get_room(launch_id, operator=operator)
 
-    def request_revision(self, launch_id: str, note: str, *, actor_user_id: str) -> LaunchRoomView:
+    def request_revision(
+        self,
+        launch_id: str,
+        note: str,
+        *,
+        operator: TrustedOperator,
+    ) -> LaunchRoomView:
         _require_text("note", note)
         _reject_worth("revision", note)
 
         def work(session: Session) -> None:
             launch = _launch(session, launch_id)
-            _assert_owner(session, launch, actor_user_id)
+            _authorize(session, launch, operator)
             workflow = _latest_workflow(session, launch)
             if (
                 workflow is None
@@ -295,7 +310,7 @@ class LaunchRoomService:
                     "revision_refused",
                     "A revision can be requested only while a decision is waiting for you.",
                 )
-            context = _context(launch, actor_user_id)
+            context = _context(launch, operator.user_id)
             source = create_source_record(
                 session,
                 context=context,
@@ -322,12 +337,12 @@ class LaunchRoomService:
             )
 
         self._write(work)
-        return self.get_room(launch_id)
+        return self.get_room(launch_id, operator=operator)
 
-    def approve(self, launch_id: str, *, actor_user_id: str) -> LaunchRoomView:
+    def approve(self, launch_id: str, *, operator: TrustedOperator) -> LaunchRoomView:
         def work(session: Session) -> None:
             launch = _launch(session, launch_id)
-            _assert_owner(session, launch, actor_user_id)
+            _authorize(session, launch, operator)
             if _unconsumed(session, launch, "launch_room.revision_requested"):
                 raise ProductError(
                     "revision_pending",
@@ -339,32 +354,39 @@ class LaunchRoomService:
             try:
                 approve_decision_for_production(
                     session,
-                    context=_context(launch, actor_user_id),
+                    context=_context(launch, operator.user_id),
                     workflow_id=workflow.id,
-                    approved_by_user_id=actor_user_id,
+                    approved_by_user_id=operator.user_id,
                 )
             except PermanentJobError as exc:
                 raise ProductError("approval_refused", str(exc)) from exc
 
         self._write(work)
-        return self.get_room(launch_id)
+        return self.get_room(launch_id, operator=operator)
 
-    def prepare_materials(self, launch_id: str) -> LaunchRoomView:
-        facts = self._write(lambda session: self._prepare_materials(session, launch_id))
+    def prepare_materials(self, launch_id: str, *, operator: TrustedOperator) -> LaunchRoomView:
+        facts = self._write(lambda session: self._prepare_materials(session, launch_id, operator))
         if facts is not None:
             self._runtime.drain(facts)
-            self._assert_materials_ready(launch_id)
-        return self.get_room(launch_id)
+            self._assert_materials_ready(launch_id, operator)
+        return self.get_room(launch_id, operator=operator)
 
-    def record_manual_note(self, launch_id: str, note: str) -> LaunchRoomView:
+    def record_manual_note(
+        self,
+        launch_id: str,
+        note: str,
+        *,
+        operator: TrustedOperator,
+    ) -> LaunchRoomView:
         _require_text("note", note)
         _reject_worth("note", note)
 
         def work(session: Session) -> None:
             launch = _launch(session, launch_id)
+            _authorize(session, launch, operator)
             create_business_event(
                 session,
-                context=_context(launch, _owner_id(session, launch)),
+                context=_context(launch, operator.user_id),
                 event_type="launch_room.manual_note",
                 occurred_at=utc_now(),
                 recorded_at=utc_now(),
@@ -376,17 +398,24 @@ class LaunchRoomService:
             )
 
         self._write(work)
-        return self.get_room(launch_id)
+        return self.get_room(launch_id, operator=operator)
 
-    def record_untrusted_message(self, launch_id: str, message: str) -> LaunchRoomView:
+    def record_untrusted_message(
+        self,
+        launch_id: str,
+        message: str,
+        *,
+        operator: TrustedOperator,
+    ) -> LaunchRoomView:
         _require_text("message", message)
 
         def work(session: Session) -> None:
             launch = _launch(session, launch_id)
+            _authorize(session, launch, operator)
             digest = hashlib.sha256(message.encode("utf-8")).hexdigest()[:16]
             create_business_event(
                 session,
-                context=_context(launch, _owner_id(session, launch)),
+                context=_context(launch, operator.user_id),
                 event_type="launch_room.untrusted_message_not_instruction",
                 occurred_at=utc_now(),
                 recorded_at=utc_now(),
@@ -399,11 +428,12 @@ class LaunchRoomService:
             )
 
         self._write(work)
-        return self.get_room(launch_id)
+        return self.get_room(launch_id, operator=operator)
 
-    def adapt(self, launch_id: str) -> LaunchRoomView:
+    def adapt(self, launch_id: str, *, operator: TrustedOperator) -> LaunchRoomView:
         def work(session: Session) -> LaunchScriptFacts:
             launch = _launch(session, launch_id)
+            _authorize(session, launch, operator)
             if _metric_count(session, launch) != 0:
                 raise ProductError(
                     "adapt_refused",
@@ -411,25 +441,27 @@ class LaunchRoomService:
                 )
             create_business_event(
                 session,
-                context=_context(launch, _owner_id(session, launch)),
+                context=_context(launch, operator.user_id),
                 event_type="launch_room.adaptation_requested",
                 occurred_at=utc_now(),
                 recorded_at=utc_now(),
                 payload={"launch_id": launch.id, "consumed_by_workflow_id": None},
             )
-            return self._start_cycle(session, launch)
+            return self._start_cycle(session, launch, operator.user_id)
 
         facts = self._write(work)
         self._runtime.drain(facts)
-        self._assert_decision_ready(launch_id)
-        return self.get_room(launch_id)
+        self._assert_decision_ready(launch_id, operator)
+        return self.get_room(launch_id, operator=operator)
 
     def _prepare_decision(
         self,
         session: Session,
         launch_id: str,
+        operator: TrustedOperator,
     ) -> tuple[LaunchScriptFacts | None, bool]:
         launch = _launch(session, launch_id)
+        _authorize(session, launch, operator)
         if not _unconsumed(session, launch, "launch_room.revision_requested"):
             workflow = _latest_workflow(session, launch)
             if workflow is not None and workflow.final_decision_id is not None:
@@ -439,10 +471,16 @@ class LaunchRoomService:
                 "adapt_pending",
                 "Finish adaptation with the adapt action. Do not mix it into a normal decision.",
             )
-        return self._start_cycle(session, launch), True
+        return self._start_cycle(session, launch, operator.user_id), True
 
-    def _prepare_materials(self, session: Session, launch_id: str) -> LaunchScriptFacts | None:
+    def _prepare_materials(
+        self,
+        session: Session,
+        launch_id: str,
+        operator: TrustedOperator,
+    ) -> LaunchScriptFacts | None:
         launch = _launch(session, launch_id)
+        _authorize(session, launch, operator)
         approved = session.scalar(
             select(DecisionWorkflowModel)
             .where(
@@ -488,7 +526,12 @@ class LaunchRoomService:
             raise ProductError("materials_refused", str(exc)) from exc
         return _facts(session, launch, adapting=False)
 
-    def _start_cycle(self, session: Session, launch: LaunchModel) -> LaunchScriptFacts:
+    def _start_cycle(
+        self,
+        session: Session,
+        launch: LaunchModel,
+        actor_user_id: str,
+    ) -> LaunchScriptFacts:
         session.flush()
         fresh = _unconsumed(session, launch, "launch_room.revision_requested") or _unconsumed(
             session, launch, "launch_room.adaptation_requested"
@@ -497,7 +540,7 @@ class LaunchRoomService:
         try:
             result = start_decision_workflow(
                 session,
-                context=_context(launch, _owner_id(session, launch)),
+                context=_context(launch, actor_user_id),
                 queue=self._runtime.queue,
                 clock=self._runtime.clock,
                 launch_id=launch.id,
@@ -518,9 +561,11 @@ class LaunchRoomService:
         session.flush()
         return _facts(session, launch, adapting=adapting)
 
-    def _assert_decision_ready(self, launch_id: str) -> None:
+    def _assert_decision_ready(self, launch_id: str, operator: TrustedOperator) -> None:
         def work(session: Session) -> None:
-            workflow = _latest_workflow(session, _launch(session, launch_id))
+            launch = _launch(session, launch_id)
+            _authorize(session, launch, operator)
+            workflow = _latest_workflow(session, launch)
             if (
                 workflow is None
                 or workflow.status != DecisionWorkflowStatus.AWAITING_DECISION_APPROVAL.value
@@ -533,9 +578,10 @@ class LaunchRoomService:
 
         self._write(work)
 
-    def _assert_materials_ready(self, launch_id: str) -> None:
+    def _assert_materials_ready(self, launch_id: str, operator: TrustedOperator) -> None:
         def work(session: Session) -> None:
             launch = _launch(session, launch_id)
+            _authorize(session, launch, operator)
             workflow = session.scalar(
                 select(ProductionWorkflowModel)
                 .where(
@@ -612,6 +658,20 @@ def _facts(session: Session, launch: LaunchModel, *, adapting: bool) -> LaunchSc
     )
 
 
+def _authorize(session: Session, launch: LaunchModel, operator: TrustedOperator) -> None:
+    try:
+        operator.scope.assert_matches(
+            organization_id=launch.organization_id,
+            business_id=launch.business_id,
+        )
+    except TenantScopeViolation as exc:
+        raise ProductError(
+            "scope_violation",
+            "This launch is not in the requested business.",
+        ) from exc
+    _assert_owner(session, launch, operator.user_id)
+
+
 def _launch(session: Session, launch_id: str) -> LaunchModel:
     launch = session.get(LaunchModel, launch_id)
     if launch is None:
@@ -656,19 +716,6 @@ def _context(launch: LaunchModel, actor_user_id: str) -> CommandContext:
         actor_user_id=actor_user_id,
         correlation_id=new_id(),
     )
-
-
-def _owner_id(session: Session, launch: LaunchModel) -> str:
-    membership = session.scalar(
-        select(BusinessMembershipModel).where(
-            BusinessMembershipModel.organization_id == launch.organization_id,
-            BusinessMembershipModel.business_id == launch.business_id,
-            BusinessMembershipModel.role == "OWNER",
-        )
-    )
-    if membership is None:
-        raise ProductError("owner_required", "This business has no owner.")
-    return membership.user_id
 
 
 def _assert_owner(session: Session, launch: LaunchModel, user_id: str) -> None:

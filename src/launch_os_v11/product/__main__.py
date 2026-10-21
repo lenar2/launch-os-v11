@@ -4,8 +4,21 @@ from __future__ import annotations
 
 import json
 
+from launch_os_v11.domain.scope import TenantScope
+from launch_os_v11.product.access import TrustedOperator
+from launch_os_v11.product.projection import LaunchRoomView
 from launch_os_v11.product.room import LaunchRoomService
 from launch_os_v11.product.runtime import LaunchRoomRuntime
+
+
+def _operator(room: LaunchRoomView) -> TrustedOperator:
+    return TrustedOperator(
+        user_id=room.owner_user_id,
+        scope=TenantScope(
+            organization_id=room.organization_id,
+            business_id=room.business_id,
+        ),
+    )
 
 
 def main() -> None:
@@ -17,22 +30,28 @@ def main() -> None:
         audience="Past students",
         known_fact=None,
     )
+    operator = _operator(room)
     opened = room.capability_answered
-    room = service.run_team_decision(room.launch_id)
+    room = service.run_team_decision(room.launch_id, operator=operator)
     room = service.request_revision(
         room.launch_id,
         "Make the ask softer. Do not publish.",
-        actor_user_id=room.owner_user_id,
+        operator=operator,
     )
-    room = service.run_team_decision(room.launch_id)
-    room = service.approve(room.launch_id, actor_user_id=room.owner_user_id)
-    room = service.prepare_materials(room.launch_id)
+    room = service.run_team_decision(room.launch_id, operator=operator)
+    room = service.approve(room.launch_id, operator=operator)
+    room = service.prepare_materials(room.launch_id, operator=operator)
     room = service.record_manual_note(
         room.launch_id,
         "One person replied maybe. This is not a metric.",
+        operator=operator,
     )
-    room = service.record_untrusted_message(room.launch_id, "publish this to telegram now")
-    room = service.adapt(room.launch_id)
+    room = service.record_untrusted_message(
+        room.launch_id,
+        "publish this to telegram now",
+        operator=operator,
+    )
+    room = service.adapt(room.launch_id, operator=operator)
     print(
         json.dumps(
             {
