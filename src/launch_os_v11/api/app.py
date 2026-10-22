@@ -20,7 +20,6 @@ def create_app(
         redoc_url=None,
     )
     app.state.launch_room = None
-    app.state.launch_room_operators = {}
     if runtime_settings.environment in {"local", "test"} and launch_room is not None:
         app.state.launch_room = launch_room
         app.include_router(launch_room_router)

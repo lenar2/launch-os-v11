@@ -41,10 +41,10 @@ is published.
 
 `PYTHON=python3.11 python -m launch_os_v11.product`
 
-HTTP Launch Room routes are mounted only when a local or test app is given an
-explicit runtime. They are absent in staging and production. A request field
-named `owner_user_id` or `actor_user_id` is rejected. `make run-api` stays the
-health server and does not publish the room.
+That process is the single-user contour: it holds the server-created owner and
+does not accept a client user id. HTTP is not a second user. Knowing a launch
+id does not grant read, workflow, or approval. Staging and production do not
+mount the routes. `make run-api` stays the health server.
 
 ## Development
 

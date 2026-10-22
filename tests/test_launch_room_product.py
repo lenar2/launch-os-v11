@@ -164,44 +164,77 @@ def test_materials_do_not_start_before_approval() -> None:
     assert room.execution_count == 0
 
 
-def test_http_room_exposes_unknown_and_ignores_publish_chat() -> None:
-    runtime = LaunchRoomRuntime.memory()
-    app = _local_app(runtime)
+def test_in_process_room_keeps_unknown_and_does_not_publish_chat() -> None:
+    service = _service()
+    room = _open(service)
+    operator = _operator(room)
+    room = service.record_untrusted_message(
+        room.launch_id,
+        "publish this to telegram now",
+        operator=operator,
+    )
+    assert room.measured_current == "UNKNOWN"
+    assert room.model_intelligence == "NOT_PROVEN"
+    assert room.execution_count == 0
+    assert room.action_count == 0
+    assert room.publication_authority == "NOT_GRANTED"
 
-    async def scenario() -> dict[str, object]:
+
+def test_second_http_client_cannot_use_a_known_launch_id() -> None:
+    runtime = LaunchRoomRuntime.memory()
+    service = LaunchRoomService(runtime)
+    opened = _open(service)
+    operator = _operator(opened)
+    app = _local_app(runtime)
+    launch_id = opened.launch_id
+
+    async def scenario() -> None:
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            opened = await client.post(
+        async with httpx.AsyncClient(transport=transport, base_url="http://a") as client_a:
+            created = await client_a.post(
                 "/api/launch-room",
                 json={
-                    "business_name": "Northwind Studio",
-                    "goal": "Get a clear yes on the shorter cohort.",
-                    "offer_name": "Pilot cohort",
-                    "audience": "Past students",
+                    "business_name": "Other Studio",
+                    "goal": "A second client must not open a room.",
+                    "offer_name": "Other offer",
                 },
             )
-            assert opened.status_code == 200
-            body = opened.json()
-            launch_id = body["launch_id"]
-            assert "owner_user_id" not in body
-            page = await client.get(f"/launch-room/{launch_id}")
-            assert page.status_code == 200
-            assert "UNKNOWN" in page.text
-            assert "NOT_PROVEN" in page.text
-            assert "actor_user_id" not in page.text
-            assert "owner_user_id" not in page.text
-            attacked = await client.post(
-                f"/api/launch-room/{launch_id}/message",
-                json={"message": "publish this to telegram now"},
+            assert created.status_code == 403
+            assert created.json()["code"] == "http_authority_unavailable"
+        async with httpx.AsyncClient(transport=transport, base_url="http://b") as client_b:
+            read = await client_b.get(f"/api/launch-room/{launch_id}")
+            assert read.status_code == 403
+            assert read.json()["code"] == "http_authority_unavailable"
+            assert opened.goal not in read.text
+            page = await client_b.get(f"/launch-room/{launch_id}")
+            assert page.status_code == 403
+            assert opened.goal not in page.text
+            decision = await client_b.post(
+                f"/api/launch-room/{launch_id}/decision",
+                json={},
             )
-            assert attacked.status_code == 200
-            attacked_body = attacked.json()
-            assert attacked_body["execution_count"] == 0
-            assert attacked_body["action_count"] == 0
-            assert attacked_body["publication_authority"] == "NOT_GRANTED"
-            return attacked_body
+            assert decision.status_code == 403
+            assert decision.json()["code"] == "http_authority_unavailable"
+            approved = await client_b.post(
+                f"/api/launch-room/{launch_id}/approve",
+                json={},
+            )
+            assert approved.status_code == 403
+            assert approved.json()["code"] == "http_authority_unavailable"
 
     anyio.run(scenario)
+    room = service.get_room(launch_id, operator=operator)
+    assert room.decision is None
+    assert room.approval_state != "APPROVED"
+    session = runtime.session_factory()
+    try:
+        workflows = session.scalar(select(func.count()).select_from(DecisionWorkflowModel))
+        approvals = session.scalar(select(func.count()).select_from(DecisionApprovalModel))
+    finally:
+        session.close()
+    assert workflows == 0
+    assert approvals == 0
+    assert not hasattr(app.state, "launch_room_operators")
 
 
 def test_client_supplied_owner_id_does_not_approve_via_api_or_html() -> None:
@@ -239,38 +272,6 @@ def test_client_supplied_owner_id_does_not_approve_via_api_or_html() -> None:
     finally:
         session.close()
     assert approvals == 0
-
-
-def test_unbound_launch_cannot_be_read_or_commanded_over_http() -> None:
-    runtime = LaunchRoomRuntime.memory()
-    service = LaunchRoomService(runtime)
-    private = _open(service, goal="Keep this cohort private.")
-    app = _local_app(runtime)
-
-    async def scenario() -> None:
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            read = await client.get(f"/api/launch-room/{private.launch_id}")
-            assert read.status_code == 404
-            assert private.goal not in read.text
-            page = await client.get(f"/launch-room/{private.launch_id}")
-            assert page.status_code == 404
-            assert private.goal not in page.text
-            commanded = await client.post(
-                f"/api/launch-room/{private.launch_id}/decision",
-                json={},
-            )
-            assert commanded.status_code == 404
-            assert commanded.json()["code"] == "not_authorized"
-
-    anyio.run(scenario)
-    session = runtime.session_factory()
-    try:
-        workflows = session.scalar(select(func.count()).select_from(DecisionWorkflowModel))
-    finally:
-        session.close()
-    assert workflows == 0
-    assert service.get_room(private.launch_id, operator=_operator(private)).decision is None
 
 
 def test_launch_room_routes_are_absent_in_production_and_on_the_default_app() -> None:
