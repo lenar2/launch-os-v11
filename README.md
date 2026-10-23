@@ -34,6 +34,24 @@ First build target:
 
 Do not expand broad modules until this loop closes in staging.
 
+The browser room and the in-process scenario use the same governed contracts.
+Draft text is a labeled synthetic script, not a live model. Nothing is published.
+
+`PYTHON=python3.11 python -m launch_os_v11.product --serve`
+
+Then open `http://127.0.0.1:8765/launch-room` in the browser that should own
+the room. The server sets an HttpOnly cookie for that browser. Another browser
+that only knows the launch id cannot read, decide, or approve. This is a local
+client grant, not a login and not a user id.
+
+`PYTHON=python3.11 python -m launch_os_v11.product`
+
+That command prints one in-process scenario. Staging and production do not
+mount the room. `make run-api` stays the health server.
+
+`tests/test_launch_room_browser.py` repeats the same route in Chromium when
+Playwright is installed. It is not required to run the room.
+
 ## Development
 
 Install dependencies:
