@@ -1,10 +1,19 @@
-"""Run one local Launch Room scenario and print the owner-facing result."""
+"""Run the local Launch Room.
+
+`python -m launch_os_v11.product` prints one in-process scenario.
+`python -m launch_os_v11.product --serve` opens the browser room on 127.0.0.1:8765.
+"""
 
 from __future__ import annotations
 
 import json
+import sys
 
+import uvicorn
+
+from launch_os_v11.api.app import create_app
 from launch_os_v11.domain.scope import TenantScope
+from launch_os_v11.platform.config import Settings
 from launch_os_v11.product.access import TrustedOperator
 from launch_os_v11.product.projection import LaunchRoomView
 from launch_os_v11.product.room import LaunchRoomService
@@ -22,6 +31,19 @@ def _operator(room: LaunchRoomView) -> TrustedOperator:
 
 
 def main() -> None:
+    if "--serve" in sys.argv:
+        _serve()
+        return
+    _demo()
+
+
+def _serve() -> None:
+    runtime = LaunchRoomRuntime.local_file()
+    app = create_app(settings=Settings(LAUNCH_OS_ENV="local"), launch_room=runtime)
+    uvicorn.run(app, host="127.0.0.1", port=8765, log_level="info")
+
+
+def _demo() -> None:
     service = LaunchRoomService(LaunchRoomRuntime.memory())
     room = service.open_launch(
         business_name="Northwind Studio",

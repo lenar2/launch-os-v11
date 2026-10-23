@@ -13,7 +13,7 @@ import hashlib
 from collections.abc import Callable
 from typing import TypeVar
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from launch_os_v11.application.commands import (
@@ -39,6 +39,7 @@ from launch_os_v11.domain.ids import new_id
 from launch_os_v11.domain.scope import TenantScope
 from launch_os_v11.domain.time import utc_now
 from launch_os_v11.persistence.models import (
+    AssetVersionModel,
     BusinessEventModel,
     BusinessMembershipModel,
     CampaignModel,
@@ -54,7 +55,10 @@ from launch_os_v11.persistence.models import (
     UserModel,
 )
 from launch_os_v11.persistence.phase6_models import MetricVersionModel
-from launch_os_v11.persistence.production_models import ProductionWorkflowModel
+from launch_os_v11.persistence.production_models import (
+    AssetVersionCreatorModel,
+    ProductionWorkflowModel,
+)
 from launch_os_v11.product.access import TrustedOperator
 from launch_os_v11.product.errors import ProductError
 from launch_os_v11.product.projection import LaunchRoomView, project_launch_room
@@ -371,6 +375,94 @@ class LaunchRoomService:
             self._assert_materials_ready(launch_id, operator)
         return self.get_room(launch_id, operator=operator)
 
+    def save_draft(
+        self,
+        launch_id: str,
+        body: str,
+        *,
+        operator: TrustedOperator,
+    ) -> LaunchRoomView:
+        _require_text("body", body)
+        _reject_worth("draft", body)
+
+        def work(session: Session) -> None:
+            launch = _launch(session, launch_id)
+            _authorize(session, launch, operator)
+            workflow = session.scalar(
+                select(ProductionWorkflowModel)
+                .where(
+                    ProductionWorkflowModel.organization_id == launch.organization_id,
+                    ProductionWorkflowModel.business_id == launch.business_id,
+                    ProductionWorkflowModel.launch_id == launch.id,
+                    ProductionWorkflowModel.final_asset_version_id.is_not(None),
+                )
+                .order_by(ProductionWorkflowModel.created_at.desc())
+            )
+            if workflow is None or workflow.final_asset_version_id is None:
+                raise ProductError(
+                    "draft_refused",
+                    "Prepare the unpublished draft before editing it. Editing does not publish.",
+                )
+            current = session.get(AssetVersionModel, workflow.final_asset_version_id)
+            if current is None:
+                raise ProductError("draft_refused", "The current draft could not be found.")
+            version_number = int(
+                session.scalar(
+                    select(func.max(AssetVersionModel.version_number)).where(
+                        AssetVersionModel.asset_id == current.asset_id
+                    )
+                )
+                or 0
+            )
+            version = AssetVersionModel(
+                id=new_id(),
+                organization_id=launch.organization_id,
+                business_id=launch.business_id,
+                asset_id=current.asset_id,
+                version_number=version_number + 1,
+                body=body.strip(),
+                created_by_user_id=operator.user_id,
+                provenance={
+                    "schema_name": "AssetVersionProvenance",
+                    "schema_version": 1,
+                    "origin": "OWNER_EDIT",
+                    "model_intelligence": "NOT_PROVEN",
+                    "publication_performed": False,
+                },
+                created_at=utc_now(),
+            )
+            session.add(version)
+            session.flush()
+            session.add(
+                AssetVersionCreatorModel(
+                    id=new_id(),
+                    organization_id=launch.organization_id,
+                    business_id=launch.business_id,
+                    asset_version_id=version.id,
+                    creator_type="USER",
+                    created_by_user_id=operator.user_id,
+                    created_by_agent_run_id=None,
+                    created_at=utc_now(),
+                )
+            )
+            workflow.final_asset_version_id = version.id
+            create_business_event(
+                session,
+                context=_context(launch, operator.user_id),
+                event_type="launch_room.draft_edited",
+                occurred_at=utc_now(),
+                recorded_at=utc_now(),
+                payload={
+                    "launch_id": launch.id,
+                    "asset_version_id": version.id,
+                    "is_metric": False,
+                    "publication_performed": False,
+                },
+            )
+
+        self._write(work)
+        return self.get_room(launch_id, operator=operator)
+
     def record_manual_note(
         self,
         launch_id: str,
@@ -655,7 +747,35 @@ def _facts(session: Session, launch: LaunchModel, *, adapting: bool) -> LaunchSc
         audience=audience if isinstance(audience, str) else None,
         revision_requested=revision is not None,
         adapting_without_measurement=adapting,
+        revision_note=_revision_note(session, launch),
     )
+
+
+def _revision_note(session: Session, launch: LaunchModel) -> str:
+    sources = session.scalars(
+        select(SourceRecordModel)
+        .where(
+            SourceRecordModel.organization_id == launch.organization_id,
+            SourceRecordModel.business_id == launch.business_id,
+            SourceRecordModel.source_type == "owner_revision",
+        )
+        .order_by(SourceRecordModel.ingested_at)
+    ).all()
+    note = ""
+    for source in sources:
+        payload = source.payload if isinstance(source.payload, dict) else {}
+        if payload.get("launch_id") != launch.id:
+            continue
+        evidence = session.scalar(
+            select(EvidenceModel).where(
+                EvidenceModel.organization_id == launch.organization_id,
+                EvidenceModel.business_id == launch.business_id,
+                EvidenceModel.source_record_id == source.id,
+            )
+        )
+        if evidence is not None and evidence.statement.strip():
+            note = evidence.statement.strip()
+    return note
 
 
 def _authorize(session: Session, launch: LaunchModel, operator: TrustedOperator) -> None:

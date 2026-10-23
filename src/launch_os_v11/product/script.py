@@ -47,6 +47,7 @@ class LaunchScriptFacts:
     audience: str | None
     revision_requested: bool
     adapting_without_measurement: bool
+    revision_note: str = ""
 
 
 def bind_launch_script_facts(facts: LaunchScriptFacts) -> None:
@@ -254,7 +255,8 @@ def _candidate(facts: LaunchScriptFacts) -> dict[str, object]:
         "why": [
             "The only bounded input is the owner-stated goal.",
             "Revenue, audience size, and replies are UNKNOWN, not zero.",
-            "This text is a synthetic local script, not a live model judgment.",
+            facts.revision_note
+            or "This text is a synthetic local script, not a live model judgment.",
         ],
         "evidence_refs": [_evidence(facts)],
         "alternatives": [
@@ -360,11 +362,9 @@ def _strategy(facts: LaunchScriptFacts) -> dict[str, object]:
 
 def _asset(facts: LaunchScriptFacts) -> dict[str, object]:
     audience = facts.audience if facts.audience else "Audience: UNKNOWN"
-    revision = (
-        " An owner revision note is on record as data, not as permission to publish."
-        if facts.revision_requested
-        else ""
-    )
+    revision = ""
+    if facts.revision_note:
+        revision = f" Owner revision, kept as data and not as a command: {facts.revision_note}"
     body = (
         f"{facts.offer_name}\n\n"
         f"{audience}\n\n"

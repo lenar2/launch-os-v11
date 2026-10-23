@@ -20,6 +20,7 @@ from launch_os_v11.persistence.models import Base, JobModel
 from launch_os_v11.persistence.session import create_session_factory
 from launch_os_v11.platform.config import Settings
 from launch_os_v11.product.errors import ProductError
+from launch_os_v11.product.grant import ensure_grant_tables
 from launch_os_v11.product.script import (
     LaunchScriptFacts,
     SyntheticLaunchAdapter,
@@ -89,6 +90,7 @@ class LaunchRoomRuntime:
             engine_kwargs["poolclass"] = StaticPool
         engine = create_engine(database_url, **engine_kwargs)
         Base.metadata.create_all(engine)
+        ensure_grant_tables(engine)
         factory = create_session_factory(engine)
         queue = MemoryJobQueue()
         adapter = SyntheticLaunchAdapter()

@@ -18,6 +18,7 @@ from launch_os_v11.persistence.models import (
     ActionModel,
     AssetVersionModel,
     BusinessEventModel,
+    DecisionAlternativeModel,
     DecisionModel,
     DecisionWorkflowModel,
     ExecutionModel,
@@ -74,6 +75,10 @@ class LaunchRoomView:
     approval_consequence: str
     material_body: str | None
     material_status: str | None
+    draft_version: int | None
+    alternatives: tuple[str, ...]
+    assumptions: tuple[str, ...]
+    next_step: str
     observation_statement: str
     measured_current: str
     measured_numeric_value: None
@@ -149,7 +154,7 @@ def project_launch_room(
         reasons = user_view.reasons
         canonical_now = user_view.what_happens_now
         next_checkpoint = user_view.next_checkpoint
-    material_body, material_status = _material(session, launch)
+    material_body, material_status, draft_version = _material(session, launch)
     manual_notes = _events(session, launch, "launch_room.manual_note")
     metric_count = _count(session, MetricVersionModel, launch)
     action_count = _count(session, ActionModel, launch)
@@ -232,6 +237,14 @@ def project_launch_room(
         approval_consequence=approval_consequence,
         material_body=material_body,
         material_status=material_status,
+        draft_version=draft_version,
+        alternatives=_alternatives(session, launch, decision),
+        assumptions=_assumption_lines(decision),
+        next_step=_next_step(
+            decision_text=decision_text,
+            approval_state=approval_state,
+            material_body=material_body,
+        ),
         observation_statement=observation,
         measured_current="UNKNOWN",
         measured_numeric_value=None,
@@ -388,6 +401,12 @@ def _snapshot_fields(
         ),
         fact_field,
         FieldView(
+            "Working assumption",
+            "A draft can be reviewed before any external write.",
+            "ASSUMPTION",
+            "Not measured. Not a forecast and not a result.",
+        ),
+        FieldView(
             "Business snapshot",
             launch.snapshot_id or "UNKNOWN",
             "OWNER_STATED" if launch.snapshot_id else "UNKNOWN",
@@ -471,7 +490,10 @@ def _decision(
     return session.get(DecisionModel, workflow.final_decision_id)
 
 
-def _material(session: Session, launch: LaunchModel) -> tuple[str | None, str | None]:
+def _material(
+    session: Session,
+    launch: LaunchModel,
+) -> tuple[str | None, str | None, int | None]:
     workflow = session.scalar(
         select(ProductionWorkflowModel)
         .where(
@@ -483,11 +505,68 @@ def _material(session: Session, launch: LaunchModel) -> tuple[str | None, str | 
         .order_by(ProductionWorkflowModel.created_at.desc())
     )
     if workflow is None or workflow.final_asset_version_id is None:
-        return None, None
+        return None, None, None
     version = session.get(AssetVersionModel, workflow.final_asset_version_id)
     if version is None:
-        return None, workflow.status
-    return version.body, workflow.status
+        return None, workflow.status, None
+    return version.body, workflow.status, version.version_number
+
+
+def _alternatives(
+    session: Session,
+    launch: LaunchModel,
+    decision: DecisionModel | None,
+) -> tuple[str, ...]:
+    if decision is None:
+        return ()
+    rows = session.scalars(
+        select(DecisionAlternativeModel).where(
+            DecisionAlternativeModel.organization_id == launch.organization_id,
+            DecisionAlternativeModel.business_id == launch.business_id,
+            DecisionAlternativeModel.decision_id == decision.id,
+        )
+    ).all()
+    return tuple(f"{row.action} — {row.rejection_reason}" for row in rows)
+
+
+def _assumption_lines(decision: DecisionModel | None) -> tuple[str, ...]:
+    if decision is None:
+        return ()
+    lines: list[str] = []
+    for item in decision.assumptions:
+        if isinstance(item, dict):
+            statement = item.get("statement")
+            if isinstance(statement, str) and statement.strip():
+                lines.append(statement.strip())
+    return tuple(lines)
+
+
+def _next_step(
+    *,
+    decision_text: str | None,
+    approval_state: str,
+    material_body: str | None,
+) -> str:
+    if decision_text is None:
+        return "Ask the team for one unpublished decision. No metric will be invented."
+    if approval_state == "REVISION_REQUESTED":
+        return (
+            "Run the team again so the revision becomes the next decision. "
+            "Do not approve the previous one, and do not publish."
+        )
+    if approval_state == "AWAITING_OWNER":
+        return (
+            "Approve this decision if it should be drafted, or send a revision. "
+            "Approval does not publish."
+        )
+    if approval_state == "APPROVED" and not material_body:
+        return "Prepare the unpublished draft. No channel is connected."
+    if material_body:
+        return (
+            "Edit the draft if the wording is wrong. "
+            "There is still no measured result, so this is not a performance verdict."
+        )
+    return "Measured data is still UNKNOWN. Do not invent a metric."
 
 
 def _events(

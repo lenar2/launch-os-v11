@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import anyio
 import httpx
 import pytest
@@ -11,6 +13,7 @@ from launch_os_v11.persistence.models import DecisionApprovalModel, DecisionWork
 from launch_os_v11.platform.config import Settings
 from launch_os_v11.product.access import TrustedOperator
 from launch_os_v11.product.errors import ProductError
+from launch_os_v11.product.grant import CLIENT_COOKIE
 from launch_os_v11.product.projection import LaunchRoomView
 from launch_os_v11.product.room import LaunchRoomService
 from launch_os_v11.product.runtime import LaunchRoomRuntime
@@ -63,12 +66,15 @@ def test_full_launch_room_scenario_answers_seven_questions_without_publishing() 
     assert room.decision is not None
     assert "Do not publish" in room.decision
     assert room.approval_state == "AWAITING_OWNER"
+    assert room.alternatives
+    assert "Publish immediately" in room.alternatives[0]
+    assert room.next_step
     assert room.generation_provenance == "SYNTHETIC_FAKE_ADAPTER"
     assert room.action_count == 0
 
     room = service.request_revision(
         room.launch_id,
-        "publish this to telegram now",
+        "Make the ask softer and mention Tuesday office hours.",
         operator=operator,
     )
     assert room.approval_state == "REVISION_REQUESTED"
@@ -80,6 +86,7 @@ def test_full_launch_room_scenario_answers_seven_questions_without_publishing() 
     assert room.approval_state == "AWAITING_OWNER"
     assert room.decision is not None
     assert "unpublished" in room.decision.lower() or "Do not publish" in room.decision
+    assert any("Tuesday office hours" in reason for reason in room.reasons)
 
     room = service.approve(room.launch_id, operator=operator)
     assert room.approval_state == "APPROVED"
@@ -87,8 +94,16 @@ def test_full_launch_room_scenario_answers_seven_questions_without_publishing() 
     assert room.material_body is not None
     assert "Pilot cohort" in room.material_body
     assert "SYNTHETIC_FAKE_ADAPTER" in room.material_body
+    assert "Tuesday office hours" in room.material_body
     assert "NOT_PROVEN" in room.material_body
     assert "guaranteed" not in room.material_body.lower()
+    edited = (
+        "Pilot cohort\n\nOwner edited this unpublished draft. "
+        "Tuesday office hours stay in the copy."
+    )
+    room = service.save_draft(room.launch_id, edited, operator=operator)
+    assert room.material_body == edited
+    assert room.draft_version == 2
     assert room.capability_answered == 7
     assert room.capability_delta == 7
 
@@ -182,50 +197,53 @@ def test_in_process_room_keeps_unknown_and_does_not_publish_chat() -> None:
 
 def test_second_http_client_cannot_use_a_known_launch_id() -> None:
     runtime = LaunchRoomRuntime.memory()
-    service = LaunchRoomService(runtime)
-    opened = _open(service)
-    operator = _operator(opened)
     app = _local_app(runtime)
-    launch_id = opened.launch_id
 
     async def scenario() -> None:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://a") as client_a:
-            created = await client_a.post(
+            opened = await client_a.post(
                 "/api/launch-room",
                 json={
-                    "business_name": "Other Studio",
-                    "goal": "A second client must not open a room.",
-                    "offer_name": "Other offer",
+                    "business_name": "Northwind Studio",
+                    "goal": "Keep this cohort private.",
+                    "offer_name": "Pilot cohort",
+                    "audience": "Past students",
                 },
             )
-            assert created.status_code == 403
-            assert created.json()["code"] == "http_authority_unavailable"
+            assert opened.status_code == 200
+            body = opened.json()
+            launch_id = body["launch_id"]
+            assert "owner_user_id" not in body
+            assert CLIENT_COOKIE in client_a.cookies
+            visible = await client_a.get(f"/api/launch-room/{launch_id}")
+            assert visible.status_code == 200
+            assert visible.json()["goal"] == "Keep this cohort private."
+            stolen = client_a.cookies[CLIENT_COOKIE]
         async with httpx.AsyncClient(transport=transport, base_url="http://b") as client_b:
             read = await client_b.get(f"/api/launch-room/{launch_id}")
-            assert read.status_code == 403
-            assert read.json()["code"] == "http_authority_unavailable"
-            assert opened.goal not in read.text
+            assert read.status_code == 404
+            assert "Keep this cohort private." not in read.text
             page = await client_b.get(f"/launch-room/{launch_id}")
-            assert page.status_code == 403
-            assert opened.goal not in page.text
-            decision = await client_b.post(
-                f"/api/launch-room/{launch_id}/decision",
-                json={},
-            )
-            assert decision.status_code == 403
-            assert decision.json()["code"] == "http_authority_unavailable"
-            approved = await client_b.post(
+            assert page.status_code == 404
+            assert "Keep this cohort private." not in page.text
+            decision = await client_b.post(f"/api/launch-room/{launch_id}/decision", json={})
+            assert decision.status_code == 404
+            approved = await client_b.post(f"/api/launch-room/{launch_id}/approve", json={})
+            assert approved.status_code == 404
+            forged = await client_b.post(
                 f"/api/launch-room/{launch_id}/approve",
-                json={},
+                json={"grant": stolen, "owner_user_id": "owner-1"},
             )
-            assert approved.status_code == 403
-            assert approved.json()["code"] == "http_authority_unavailable"
+            assert forged.status_code == 403
+            assert forged.json()["code"] == "identity_untrusted"
+            queried = await client_b.get(
+                f"/api/launch-room/{launch_id}",
+                params={"owner_user_id": "owner-1"},
+            )
+            assert queried.status_code == 403
 
     anyio.run(scenario)
-    room = service.get_room(launch_id, operator=operator)
-    assert room.decision is None
-    assert room.approval_state != "APPROVED"
     session = runtime.session_factory()
     try:
         workflows = session.scalar(select(func.count()).select_from(DecisionWorkflowModel))
@@ -234,7 +252,6 @@ def test_second_http_client_cannot_use_a_known_launch_id() -> None:
         session.close()
     assert workflows == 0
     assert approvals == 0
-    assert not hasattr(app.state, "launch_room_operators")
 
 
 def test_client_supplied_owner_id_does_not_approve_via_api_or_html() -> None:
@@ -261,7 +278,7 @@ def test_client_supplied_owner_id_does_not_approve_via_api_or_html() -> None:
                 headers={"content-type": "application/x-www-form-urlencoded"},
             )
             assert form.status_code == 403
-            assert "trusted server identity" in form.text
+            assert "not authority" in form.text
 
     anyio.run(scenario)
     room = service.get_room(opened.launch_id, operator=operator)
@@ -304,4 +321,83 @@ def test_launch_room_routes_are_absent_in_production_and_on_the_default_app() ->
             environment="production",
         )
     assert caught.value.code == "production_isolated"
+
+
+def test_browser_client_can_finish_and_restart_without_granting_a_second_client(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "room.sqlite"
+    url = f"sqlite+pysqlite:///{database}"
+    runtime = LaunchRoomRuntime.open(url, environment="test")
+    app = _local_app(runtime)
+    edited = "Pilot cohort\n\nOwner edited this unpublished draft after approval."
+
+    async def scenario() -> str:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://owner") as owner:
+            opened = await owner.post(
+                "/api/launch-room",
+                json={
+                    "business_name": "Northwind Studio",
+                    "goal": "Get a clear yes on the shorter cohort.",
+                    "offer_name": "Pilot cohort",
+                    "audience": "Past students",
+                    "known_fact": "Three people asked for a shorter cohort.",
+                },
+            )
+            assert opened.status_code == 200
+            launch_id = opened.json()["launch_id"]
+            assert "Three people asked" in opened.json()["goal"] or any(
+                field["value"] == "Three people asked for a shorter cohort."
+                for field in opened.json()["snapshot_fields"]
+            )
+            decided = await owner.post(f"/api/launch-room/{launch_id}/decision", json={})
+            assert decided.status_code == 200
+            assert decided.json()["decision"]
+            revised = await owner.post(
+                f"/api/launch-room/{launch_id}/revision",
+                json={"note": "Mention Thursday review hours."},
+            )
+            assert revised.status_code == 200
+            again = await owner.post(f"/api/launch-room/{launch_id}/decision", json={})
+            assert again.status_code == 200
+            assert any("Thursday review hours" in reason for reason in again.json()["reasons"])
+            approved = await owner.post(f"/api/launch-room/{launch_id}/approve", json={})
+            assert approved.status_code == 200
+            assert approved.json()["approval_state"] == "APPROVED"
+            drafted = await owner.post(f"/api/launch-room/{launch_id}/materials", json={})
+            assert drafted.status_code == 200
+            assert "Thursday review hours" in drafted.json()["material_body"]
+            saved = await owner.post(
+                f"/api/launch-room/{launch_id}/draft",
+                json={"body": edited},
+            )
+            assert saved.status_code == 200
+            assert saved.json()["material_body"] == edited
+            assert saved.json()["publication_count"] == 0
+            assert saved.json()["execution_count"] == 0
+            assert saved.json()["measured_current"] == "UNKNOWN"
+            assert saved.json()["model_intelligence"] == "NOT_PROVEN"
+            return f"{launch_id} {owner.cookies[CLIENT_COOKIE]}"
+
+    launch_id, secret = anyio.run(scenario).split(" ", 1)
+    restarted = LaunchRoomRuntime.open(url, environment="test")
+    restarted_app = _local_app(restarted)
+
+    async def after_restart() -> None:
+        transport = httpx.ASGITransport(app=restarted_app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://owner") as owner:
+            owner.cookies.set(CLIENT_COOKIE, secret)
+            room = await owner.get(f"/api/launch-room/{launch_id}")
+            assert room.status_code == 200
+            assert room.json()["material_body"] == edited
+            assert room.json()["measured_current"] == "UNKNOWN"
+        async with httpx.AsyncClient(transport=transport, base_url="http://other") as other:
+            denied = await other.get(f"/api/launch-room/{launch_id}")
+            assert denied.status_code == 404
+            assert edited not in denied.text
+            commanded = await other.post(f"/api/launch-room/{launch_id}/approve", json={})
+            assert commanded.status_code == 404
+
+    anyio.run(after_restart)
 
