@@ -401,3 +401,128 @@ def test_browser_client_can_finish_and_restart_without_granting_a_second_client(
 
     anyio.run(after_restart)
 
+
+_OWNER_NOTES = (
+    "Include specific office hours in the unpublished draft",
+    "Include specific office hours in the draft",
+    "do not publish",
+    "publish this now",
+    "Mention the publication calendar only as a heading.",
+    "Оставь материал неопубликованным и укажи часы приёма.",
+    "Do not start republishing or publishing from this note.",
+    "do not execute a send from this note",
+)
+
+
+def _revision_through_saved_draft(note: str) -> LaunchRoomView:
+    service = _service()
+    room = _open(service)
+    operator = _operator(room)
+    room = service.run_team_decision(room.launch_id, operator=operator)
+    room = service.request_revision(room.launch_id, note, operator=operator)
+    room = service.run_team_decision(room.launch_id, operator=operator)
+    joined = " ".join(room.reasons)
+    assert note in joined
+    assert "request to publish or execute was ignored" not in joined
+    assert "data, not permission to publish" in joined
+    room = service.approve(room.launch_id, operator=operator)
+    assert room.publication_count == 0
+    room = service.prepare_materials(room.launch_id, operator=operator)
+    assert room.material_body is not None
+    assert note in room.material_body
+    kept = f"Pilot cohort\n\n{note}"
+    room = service.save_draft(room.launch_id, kept, operator=operator)
+    assert room.material_body == kept
+    assert room.draft_version == 2
+    room = service.record_untrusted_message(
+        room.launch_id,
+        "publish this now",
+        operator=operator,
+    )
+    assert room.publication_count == 0
+    assert room.action_count == 0
+    assert room.execution_count == 0
+    assert room.publication_authority == "NOT_GRANTED"
+    return room
+
+
+@pytest.mark.parametrize("note", _OWNER_NOTES)
+def test_owner_revision_words_survive_decision_draft_and_save(note: str) -> None:
+    _revision_through_saved_draft(note)
+
+
+def test_second_revision_keeps_the_later_owner_instruction() -> None:
+    service = _service()
+    room = _open(service)
+    operator = _operator(room)
+    first = "Include specific office hours in the unpublished draft"
+    second = "Убери лишнее и оставь неопубликованный черновик с часами."
+    room = service.run_team_decision(room.launch_id, operator=operator)
+    service.request_revision(room.launch_id, first, operator=operator)
+    service.run_team_decision(room.launch_id, operator=operator)
+    service.request_revision(room.launch_id, second, operator=operator)
+    room = service.run_team_decision(room.launch_id, operator=operator)
+    assert any(second in reason for reason in room.reasons)
+    room = service.approve(room.launch_id, operator=operator)
+    room = service.prepare_materials(room.launch_id, operator=operator)
+    assert room.material_body is not None
+    assert second in room.material_body
+    kept = f"Pilot cohort\n\n{second}"
+    room = service.save_draft(room.launch_id, kept, operator=operator)
+    assert room.draft_version == 2
+    assert room.material_body == kept
+    assert room.publication_count == 0
+    assert room.execution_count == 0
+
+
+def test_http_revision_keeps_unpublished_wording_without_a_publication() -> None:
+    runtime = LaunchRoomRuntime.memory()
+    app = _local_app(runtime)
+    note = "Include specific office hours in the unpublished draft"
+
+    async def scenario() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://owner") as owner:
+            opened = await owner.post(
+                "/api/launch-room",
+                json={
+                    "business_name": "Northwind Studio",
+                    "goal": "Get a clear yes on the shorter cohort.",
+                    "offer_name": "Pilot cohort",
+                    "audience": "Past students",
+                },
+            )
+            assert opened.status_code == 200
+            launch_id = opened.json()["launch_id"]
+            decided = await owner.post(f"/api/launch-room/{launch_id}/decision", json={})
+            assert decided.status_code == 200
+            revised = await owner.post(
+                f"/api/launch-room/{launch_id}/revision",
+                json={"note": note},
+            )
+            assert revised.status_code == 200
+            again = await owner.post(f"/api/launch-room/{launch_id}/decision", json={})
+            assert again.status_code == 200
+            assert any(note in reason for reason in again.json()["reasons"])
+            assert again.json()["publication_count"] == 0
+            approved = await owner.post(f"/api/launch-room/{launch_id}/approve", json={})
+            assert approved.status_code == 200
+            assert approved.json()["publication_authority"] == "NOT_GRANTED"
+            drafted = await owner.post(f"/api/launch-room/{launch_id}/materials", json={})
+            assert drafted.status_code == 200
+            assert note in drafted.json()["material_body"]
+            saved = await owner.post(
+                f"/api/launch-room/{launch_id}/draft",
+                json={"body": f"Pilot cohort\n\n{note}"},
+            )
+            assert saved.status_code == 200
+            payload = saved.json()
+            assert payload["draft_version"] == 2
+            assert note in payload["material_body"]
+            assert payload["publication_count"] == 0
+            assert payload["action_count"] == 0
+            assert payload["execution_count"] == 0
+
+    anyio.run(scenario)
+
+

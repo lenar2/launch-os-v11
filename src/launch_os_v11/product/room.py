@@ -69,16 +69,6 @@ from launch_os_v11.production.status import ProductionWorkflowStatus
 from launch_os_v11.runtime.errors import PermanentJobError
 
 _T = TypeVar("_T")
-_COMMAND_MARKERS = (
-    "publish",
-    "execute",
-    "send it",
-    "post it",
-    "post now",
-    "go live",
-    "bot token",
-    "api key",
-)
 _WORTH_MARKERS = (
     "human value",
     "self-worth",
@@ -877,8 +867,6 @@ def _reject_worth(field: str, value: str) -> None:
 
 def _data_note(prefix: str, note: str) -> str:
     compact = " ".join(note.split())
-    if any(marker in compact.lower() for marker in _COMMAND_MARKERS):
-        return f"{prefix} was recorded. A request to publish or execute was ignored."
     if len(compact) > 280:
         compact = compact[:277] + "..."
     return f"{prefix} (data, not permission to publish): {compact}"
