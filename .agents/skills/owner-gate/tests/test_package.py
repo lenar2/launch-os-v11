@@ -1,7 +1,7 @@
 """Manual-only static checks of this skill package; NOT a project audit."""
-from pathlib import Path
 import json
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -13,7 +13,13 @@ class OwnerGatePackageTest(unittest.TestCase):
 
     def test_skill_metadata_and_manual_gate(self):
         self.assertTrue(self.skill.startswith("---\nname: owner-gate\n"))
-        for marker in ("Manual activation", "DORMANT", "explicit user approval", "separate explicit"):
+        markers = (
+            "Manual activation",
+            "DORMANT",
+            "explicit user approval",
+            "separate explicit",
+        )
+        for marker in markers:
             self.assertIn(marker.lower(), self.skill.lower())
 
     def test_canonical_axes_and_status(self):
