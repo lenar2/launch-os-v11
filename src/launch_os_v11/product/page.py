@@ -32,7 +32,7 @@ def render_home() -> str:
     return _shell("Open a launch", body)
 
 
-def render_room(view: LaunchRoomView) -> str:
+def render_room(view: LaunchRoomView, team_html: str = "") -> str:
     known = _fields(view, {"OWNER_STATED", "KNOWN"})
     assumed = _fields(view, {"ASSUMPTION"})
     unknown = _fields(view, {"UNKNOWN"})
@@ -75,6 +75,7 @@ def render_room(view: LaunchRoomView) -> str:
       <p>Status: {escape(view.material_status or "not started")}</p>
       {editor}
     </section>
+    {team_html}
     <div class="actions">
       {_post(view.launch_id, "decision", "Ask the team", button_id="ask-team")}
       {_post(view.launch_id, "revision", "Request a revision", note=True)}
