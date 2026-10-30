@@ -8,6 +8,8 @@ from sqlalchemy import DateTime, Integer, String, Text, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
+from launch_os_v11.domain.ids import new_id
+
 
 class TeamBase(DeclarativeBase):
     pass
@@ -52,6 +54,7 @@ class TeamJobModel(TeamBase):
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     generation: Mapped[int] = mapped_column(Integer, nullable=False)
     claim_owner: Mapped[str | None] = mapped_column(String(80))
+    claim_token: Mapped[str | None] = mapped_column(String(36))
     lease_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False)
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -73,6 +76,13 @@ class TeamPacketModel(TeamBase):
 
 def ensure_team_tables(engine: Engine) -> None:
     TeamBase.metadata.create_all(engine)
+    with engine.begin() as connection:
+        rows = connection.exec_driver_sql("PRAGMA table_info(launch_team_jobs)").fetchall()
+        names = {str(row[1]) for row in rows}
+        if names and "claim_token" not in names:
+            connection.exec_driver_sql(
+                "ALTER TABLE launch_team_jobs ADD COLUMN claim_token VARCHAR(36)"
+            )
 
 
 def claim_job(
@@ -82,13 +92,15 @@ def claim_job(
     worker_id: str,
     now: datetime,
     lease: timedelta,
-) -> TeamJobModel | None:
+) -> str | None:
+    token = new_id()
     claimed_id = session.scalar(
         update(TeamJobModel)
         .where(TeamJobModel.id == job_id, TeamJobModel.status == "queued")
         .values(
             status="running",
             claim_owner=worker_id,
+            claim_token=token,
             lease_expires=now + lease,
             attempt_count=TeamJobModel.attempt_count + 1,
         )
@@ -96,7 +108,7 @@ def claim_job(
     )
     if claimed_id is None:
         return None
-    return session.get(TeamJobModel, claimed_id)
+    return token
 
 
 def job_by_key(session: Session, key: str) -> TeamJobModel | None:

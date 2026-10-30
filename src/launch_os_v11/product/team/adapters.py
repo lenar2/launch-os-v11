@@ -21,6 +21,10 @@ class TransientTeamError(Exception):
     """The worker may retry this assignment."""
 
 
+class PermanentTeamError(Exception):
+    """The current claim failed and must not be retried."""
+
+
 class SpecialistExecutor(Protocol):
     provenance: str
 

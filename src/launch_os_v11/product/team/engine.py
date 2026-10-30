@@ -16,6 +16,7 @@ from launch_os_v11.domain.ids import new_id
 from launch_os_v11.product.errors import ProductError
 from launch_os_v11.product.team.adapters import (
     ModelUnavailable,
+    PermanentTeamError,
     SpecialistExecutor,
     TestDoubleExecutor,
     TransientTeamError,
@@ -49,6 +50,12 @@ _T = TypeVar("_T")
 
 def system_clock() -> datetime:
     return datetime.now(UTC)
+
+
+@dataclass(frozen=True)
+class JobClaim:
+    job_id: str
+    token: str
 
 
 @dataclass
@@ -123,14 +130,14 @@ class TeamEngine:
         raise ProductError("workflow_failed", "Launch team did not finish.")
 
     def step(self, launch_id: str, *, worker_id: str) -> bool:
-        job_id = self.claim_one(launch_id, worker_id=worker_id)
-        if job_id is None:
+        claim = self.claim_one(launch_id, worker_id=worker_id)
+        if claim is None:
             return False
-        self.complete_claimed(job_id, worker_id=worker_id)
+        self.complete_claimed(claim.job_id, worker_id=worker_id, claim_token=claim.token)
         return True
 
-    def claim_one(self, launch_id: str, *, worker_id: str) -> str | None:
-        def work(session: Session) -> str | None:
+    def claim_one(self, launch_id: str, *, worker_id: str) -> JobClaim | None:
+        def work(session: Session) -> JobClaim | None:
             cycle = self._cycle(session, launch_id)
             if cycle.status in {"MODEL_UNAVAILABLE", "AWAITING_OWNER"}:
                 return None
@@ -173,33 +180,37 @@ class TeamEngine:
                 .values(expected_inputs_json=expected)
             )
             session.expire_all()
-            claimed = claim_job(
+            chosen_id = candidate.id
+            token = claim_job(
                 session,
-                job_id=candidate.id,
+                job_id=chosen_id,
                 worker_id=worker_id,
                 now=now,
                 lease=LEASE,
             )
-            if claimed is None:
+            if token is None:
                 return None
             session.expire_all()
-            return claimed.id
+            return JobClaim(chosen_id, token)
 
         return self._tx(work)
 
-    def complete_claimed(self, job_id: str, *, worker_id: str) -> None:
-        assignment = self._assignment(job_id, worker_id)
+    def complete_claimed(self, job_id: str, *, worker_id: str, claim_token: str) -> None:
+        assignment = self._assignment(job_id, worker_id, claim_token)
         if assignment is None:
             return
         try:
             output = self._executor.execute(assignment)
         except ModelUnavailable as exc:
-            self._stop_unavailable(job_id, str(exc))
+            self._stop_unavailable(job_id, worker_id, claim_token, str(exc))
             return
         except TransientTeamError as exc:
-            self._retry(job_id, str(exc))
+            self._retry(job_id, worker_id, claim_token, str(exc))
             return
-        self._commit_output(job_id, worker_id, assignment, output)
+        except PermanentTeamError as exc:
+            self._fail_permanent(job_id, worker_id, claim_token, str(exc))
+            return
+        self._commit_output(job_id, worker_id, claim_token, assignment, output)
 
     def apply_change(
         self,
@@ -300,11 +311,11 @@ class TeamEngine:
         finally:
             session.close()
 
-    def _assignment(self, job_id: str, worker_id: str) -> Assignment | None:
+    def _assignment(self, job_id: str, worker_id: str, claim_token: str) -> Assignment | None:
         session = self._sessions()
         try:
-            job = session.get(TeamJobModel, job_id)
-            if job is None or job.status != "running" or job.claim_owner != worker_id:
+            job = _owned_job(session, job_id, worker_id, claim_token)
+            if job is None:
                 return None
             cycle = session.get(TeamCycleModel, job.cycle_id)
             if cycle is None:
@@ -326,12 +337,13 @@ class TeamEngine:
         self,
         job_id: str,
         worker_id: str,
+        claim_token: str,
         assignment: Assignment,
         output: SpecialistOutput,
     ) -> None:
         def work(session: Session) -> None:
-            job = session.get(TeamJobModel, job_id)
-            if job is None or job.status != "running" or job.claim_owner != worker_id:
+            job = _owned_job(session, job_id, worker_id, claim_token)
+            if job is None:
                 return
             cycle = session.get(TeamCycleModel, job.cycle_id)
             if cycle is None:
@@ -339,11 +351,16 @@ class TeamEngine:
             current_ids = self._input_ids(session, cycle, job.role)
             expected = json.loads(job.expected_inputs_json)
             if current_ids != expected:
-                job.status = "stale"
-                job.claim_owner = None
-                job.lease_expires = None
-                job.error_summary = "inputs changed before the result was saved"
-                self._ensure_jobs(session, cycle, generation_for={job.role})
+                won = _settle(
+                    session,
+                    job_id,
+                    worker_id,
+                    claim_token,
+                    status="stale",
+                    error_summary="inputs changed before the result was saved",
+                )
+                if won is not None:
+                    self._ensure_jobs(session, cycle, generation_for={job.role})
                 return
             if output.provenance not in {TEST_DOUBLE, self._executor.provenance}:
                 raise ProductError("workflow_failed", "Specialist provenance is not labeled.")
@@ -358,14 +375,23 @@ class TeamEngine:
             encoded = json.dumps(packet, sort_keys=True)
             if job.role == "critic":
                 output.body["packet_hash"] = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+            checkpoint = session.begin_nested()
             artifact = self._write_artifact(session, cycle, job.role, output, packet)
-            job.status = "succeeded"
-            job.artifact_id = artifact.id
-            job.claim_owner = None
-            job.lease_expires = None
-            job.error_summary = None
             if job.role == "critic":
                 self._save_packet(session, cycle.id, job.id, encoded)
+            won = _settle(
+                session,
+                job_id,
+                worker_id,
+                claim_token,
+                status="succeeded",
+                error_summary=None,
+                artifact_id=artifact.id,
+            )
+            if won is None:
+                checkpoint.rollback()
+                return
+            checkpoint.commit()
             self._refresh_status(session, cycle)
 
         self._tx(work)
@@ -395,37 +421,74 @@ class TeamEngine:
         output.body["packet_hash"] = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
         return output, encoded
 
-    def _stop_unavailable(self, job_id: str, message: str) -> None:
+    def _stop_unavailable(
+        self,
+        job_id: str,
+        worker_id: str,
+        claim_token: str,
+        message: str,
+    ) -> None:
         def work(session: Session) -> None:
-            job = session.get(TeamJobModel, job_id)
-            if job is None or job.status != "running":
+            won = _settle(
+                session,
+                job_id,
+                worker_id,
+                claim_token,
+                status="blocked",
+                error_summary=message[:300],
+            )
+            if won is None:
                 return
-            job.status = "blocked"
-            job.claim_owner = None
-            job.lease_expires = None
-            job.error_summary = message[:300]
-            cycle = session.get(TeamCycleModel, job.cycle_id)
+            cycle = session.get(TeamCycleModel, won.cycle_id)
             if cycle is not None:
                 cycle.status = "MODEL_UNAVAILABLE"
 
         self._tx(work)
 
-    def _retry(self, job_id: str, message: str) -> None:
+    def _retry(self, job_id: str, worker_id: str, claim_token: str, message: str) -> None:
         def work(session: Session) -> None:
-            job = session.get(TeamJobModel, job_id)
-            if job is None or job.status != "running":
+            job = _owned_job(session, job_id, worker_id, claim_token)
+            if job is None:
                 return
-            job.claim_owner = None
-            job.lease_expires = None
-            job.error_summary = message[:300]
-            if job.attempt_count < job.max_attempts:
-                job.status = "queued"
-                job.available_at = self._now() + timedelta(seconds=5)
-            else:
-                job.status = "failed"
-                cycle = session.get(TeamCycleModel, job.cycle_id)
-                if cycle is not None:
-                    cycle.status = "AWAITING_OWNER"
+            failed = job.attempt_count >= job.max_attempts
+            won = _settle(
+                session,
+                job_id,
+                worker_id,
+                claim_token,
+                status="failed" if failed else "queued",
+                error_summary=message[:300],
+                available_at=job.available_at if failed else self._now() + timedelta(seconds=5),
+            )
+            if won is None or not failed:
+                return
+            cycle = session.get(TeamCycleModel, won.cycle_id)
+            if cycle is not None:
+                cycle.status = "AWAITING_OWNER"
+
+        self._tx(work)
+
+    def _fail_permanent(
+        self,
+        job_id: str,
+        worker_id: str,
+        claim_token: str,
+        message: str,
+    ) -> None:
+        def work(session: Session) -> None:
+            won = _settle(
+                session,
+                job_id,
+                worker_id,
+                claim_token,
+                status="failed",
+                error_summary=message[:300],
+            )
+            if won is None:
+                return
+            cycle = session.get(TeamCycleModel, won.cycle_id)
+            if cycle is not None:
+                cycle.status = "AWAITING_OWNER"
 
         self._tx(work)
 
@@ -480,6 +543,7 @@ class TeamEngine:
                 .values(
                     status=status,
                     claim_owner=None,
+                    claim_token=None,
                     lease_expires=None,
                     available_at=now,
                 )
@@ -693,6 +757,61 @@ def _as_naive(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value
     return value.astimezone(UTC).replace(tzinfo=None)
+
+
+def _owned_job(
+    session: Session,
+    job_id: str,
+    worker_id: str,
+    claim_token: str,
+) -> TeamJobModel | None:
+    return session.scalar(
+        select(TeamJobModel).where(
+            TeamJobModel.id == job_id,
+            TeamJobModel.status == "running",
+            TeamJobModel.claim_owner == worker_id,
+            TeamJobModel.claim_token == claim_token,
+        )
+    )
+
+
+def _settle(
+    session: Session,
+    job_id: str,
+    worker_id: str,
+    claim_token: str,
+    *,
+    status: str,
+    error_summary: str | None,
+    artifact_id: str | None = None,
+    available_at: datetime | None = None,
+) -> TeamJobModel | None:
+    values: dict[str, object] = {
+        "status": status,
+        "claim_owner": None,
+        "claim_token": None,
+        "lease_expires": None,
+        "error_summary": error_summary,
+    }
+    if artifact_id is not None:
+        values["artifact_id"] = artifact_id
+    if available_at is not None:
+        values["available_at"] = available_at
+    updated = session.scalar(
+        update(TeamJobModel)
+        .where(
+            TeamJobModel.id == job_id,
+            TeamJobModel.status == "running",
+            TeamJobModel.claim_owner == worker_id,
+            TeamJobModel.claim_token == claim_token,
+        )
+        .values(**values)
+        .returning(TeamJobModel.id)
+    )
+    if updated is None:
+        return None
+    session.expire_all()
+    return session.get(TeamJobModel, updated)
 
 
 def _summary(body: dict[str, object]) -> str:

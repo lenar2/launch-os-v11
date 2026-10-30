@@ -21,6 +21,7 @@ from launch_os_v11.product.team.adapters import (
     ChatBridgeExecutor,
     ModelInvocationExecutor,
     ModelUnavailable,
+    PermanentTeamError,
     TestDoubleExecutor,
     TransientTeamError,
 )
@@ -31,7 +32,7 @@ from launch_os_v11.product.team.contracts import (
 )
 from launch_os_v11.product.team.engine import MutableClock, TeamEngine
 from launch_os_v11.product.team.roles import RoleSpec, catalog
-from launch_os_v11.product.team.store import TeamArtifactModel
+from launch_os_v11.product.team.store import TeamArtifactModel, TeamJobModel
 
 INTENT = (
     "Разработать запуск онлайн-курса для существующей аудитории "
@@ -282,9 +283,11 @@ def test_expired_lease_can_be_claimed_once_and_a_late_result_is_ignored(tmp_path
     assert first is not None
     clock.advance(31)
     second = engine.claim_one(room.launch_id, worker_id="worker-b")
-    assert second == first
-    engine.complete_claimed(first, worker_id="worker-a")
-    engine.complete_claimed(first, worker_id="worker-b")
+    assert second is not None
+    assert second.job_id == first.job_id
+    assert second.token != first.token
+    engine.complete_claimed(first.job_id, worker_id="worker-a", claim_token=first.token)
+    engine.complete_claimed(second.job_id, worker_id="worker-b", claim_token=second.token)
     rows = engine.artifact_rows(room.launch_id, "audience")
     assert len([row for row in rows if row[1] == "current"]) == 1
 
@@ -324,9 +327,9 @@ def test_only_one_worker_claims_the_same_queued_job(tmp_path: Path) -> None:
             lambda name: engine.claim_one(room.launch_id, worker_id=name),
             ("worker-a", "worker-b"),
         ))
-    winners = [job_id for job_id in claimed if job_id is not None]
+    winners = [claim.job_id for claim in claimed if claim is not None]
     assert len(winners) == 1
-    assert winners[0] == claimed[0] or winners[0] == claimed[1]
+    assert len(set(winners)) == 1
 
 
 def test_stale_result_is_not_saved_over_newer_inputs(tmp_path: Path) -> None:
@@ -360,7 +363,7 @@ def test_stale_result_is_not_saved_over_newer_inputs(tmp_path: Path) -> None:
             )
     finally:
         session.close()
-    engine.complete_claimed(offer_job, worker_id="lead")
+    engine.complete_claimed(offer_job.job_id, worker_id="lead", claim_token=offer_job.token)
     assert engine.artifact_rows(room.launch_id, "offer") == []
 
 
@@ -402,7 +405,7 @@ def test_editorial_and_funnel_can_be_claimed_independently(tmp_path: Path) -> No
     assert status["funnel"] == "queued"
     other = engine.claim_one(room.launch_id, worker_id="funnel-worker")
     assert other is not None
-    assert other != claimed
+    assert other.job_id != claimed.job_id
 
 
 def test_restart_continues_the_same_cycle(tmp_path: Path) -> None:
@@ -484,3 +487,166 @@ def test_room_service_runs_the_team_and_keeps_publication_at_zero(tmp_path: Path
         ChatBridgeExecutor().execute(assignment)
     with pytest.raises(ModelUnavailable):
         ModelInvocationExecutor().execute(assignment)
+
+
+def _claim_state(runtime: LaunchRoomRuntime, role: str) -> tuple[str, str | None]:
+    session = runtime.session_factory()
+    try:
+        job = session.scalar(select(TeamJobModel).where(TeamJobModel.role == role))
+        assert job is not None
+        return job.status, job.claim_owner
+    finally:
+        session.close()
+
+
+def _late_reclaim(clock: MutableClock, engine: TeamEngine, launch_id: str, worker_id: str):
+    clock.advance(31)
+    reclaimed = engine.claim_one(launch_id, worker_id=worker_id)
+    assert reclaimed is not None
+    return reclaimed
+
+
+def test_late_model_unavailable_keeps_the_new_owners_claim(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    room = _open_course(LaunchRoomService(runtime))
+    clock = MutableClock(datetime(2026, 1, 1, tzinfo=UTC))
+
+    class Late(TestDoubleExecutor):
+        def execute(self, assignment):
+            del assignment
+            _late_reclaim(clock, engine, room.launch_id, "worker-b")
+            raise ModelUnavailable("late")
+
+    engine = _engine(runtime, executor=Late(), clock=clock)
+    _start(engine, room)
+    claim = engine.claim_one(room.launch_id, worker_id="worker-a")
+    assert claim is not None
+    engine.complete_claimed(claim.job_id, worker_id="worker-a", claim_token=claim.token)
+    assert _claim_state(runtime, "audience") == ("running", "worker-b")
+    assert engine.artifact_rows(room.launch_id, "audience") == []
+    assert _counts(runtime) == {"actions": 0, "executions": 0, "publications": 0}
+
+
+def test_late_transient_error_keeps_the_new_owners_claim(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    room = _open_course(LaunchRoomService(runtime))
+    clock = MutableClock(datetime(2026, 1, 1, tzinfo=UTC))
+
+    class Late(TestDoubleExecutor):
+        def execute(self, assignment):
+            del assignment
+            _late_reclaim(clock, engine, room.launch_id, "worker-b")
+            raise TransientTeamError("late")
+
+    engine = _engine(runtime, executor=Late(), clock=clock)
+    _start(engine, room)
+    claim = engine.claim_one(room.launch_id, worker_id="worker-a")
+    assert claim is not None
+    engine.complete_claimed(claim.job_id, worker_id="worker-a", claim_token=claim.token)
+    assert _claim_state(runtime, "audience") == ("running", "worker-b")
+    assert engine.artifact_rows(room.launch_id, "audience") == []
+
+
+def test_late_success_after_reclaim_does_not_write_an_artifact(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    room = _open_course(LaunchRoomService(runtime))
+    clock = MutableClock(datetime(2026, 1, 1, tzinfo=UTC))
+
+    class Late(TestDoubleExecutor):
+        def execute(self, assignment):
+            _late_reclaim(clock, engine, room.launch_id, "worker-b")
+            return super().execute(assignment)
+
+    engine = _engine(runtime, executor=Late(), clock=clock)
+    _start(engine, room)
+    claim = engine.claim_one(room.launch_id, worker_id="worker-a")
+    assert claim is not None
+    engine.complete_claimed(claim.job_id, worker_id="worker-a", claim_token=claim.token)
+    assert _claim_state(runtime, "audience") == ("running", "worker-b")
+    assert engine.artifact_rows(room.launch_id, "audience") == []
+
+
+def test_same_worker_reclaim_rejects_the_previous_attempt(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    room = _open_course(LaunchRoomService(runtime))
+    clock = MutableClock(datetime(2026, 1, 1, tzinfo=UTC))
+
+    class Late(TestDoubleExecutor):
+        def execute(self, assignment):
+            _late_reclaim(clock, engine, room.launch_id, "worker-a")
+            return super().execute(assignment)
+
+    engine = _engine(runtime, executor=Late(), clock=clock)
+    _start(engine, room)
+    claim = engine.claim_one(room.launch_id, worker_id="worker-a")
+    assert claim is not None
+    engine.complete_claimed(claim.job_id, worker_id="worker-a", claim_token=claim.token)
+    assert _claim_state(runtime, "audience") == ("running", "worker-a")
+    assert engine.artifact_rows(room.launch_id, "audience") == []
+
+
+def test_permanent_error_blocks_only_the_current_claim(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    room = _open_course(LaunchRoomService(runtime))
+
+    class Broken(TestDoubleExecutor):
+        def execute(self, assignment):
+            del assignment
+            raise PermanentTeamError("the specialist cannot finish this claim")
+
+    engine = _engine(runtime, executor=Broken())
+    _start(engine, room)
+    claim = engine.claim_one(room.launch_id, worker_id="worker-a")
+    assert claim is not None
+    engine.complete_claimed(claim.job_id, worker_id="worker-a", claim_token=claim.token)
+    assert _claim_state(runtime, "audience") == ("failed", None)
+    snapshot = engine.snapshot(room.launch_id)
+    assert snapshot is not None
+    assert snapshot.status == "AWAITING_OWNER"
+    assert engine.artifact_rows(room.launch_id, "audience") == []
+    assert _counts(runtime)["publications"] == 0
+
+
+def test_late_permanent_error_keeps_the_new_owners_claim(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    room = _open_course(LaunchRoomService(runtime))
+    clock = MutableClock(datetime(2026, 1, 1, tzinfo=UTC))
+
+    class Late(TestDoubleExecutor):
+        def execute(self, assignment):
+            del assignment
+            _late_reclaim(clock, engine, room.launch_id, "worker-b")
+            raise PermanentTeamError("late")
+
+    engine = _engine(runtime, executor=Late(), clock=clock)
+    _start(engine, room)
+    claim = engine.claim_one(room.launch_id, worker_id="worker-a")
+    assert claim is not None
+    engine.complete_claimed(claim.job_id, worker_id="worker-a", claim_token=claim.token)
+    assert _claim_state(runtime, "audience") == ("running", "worker-b")
+    assert engine.artifact_rows(room.launch_id, "audience") == []
+    assert _counts(runtime) == {"actions": 0, "executions": 0, "publications": 0}
+
+
+def test_restart_keeps_the_old_token_from_finishing_the_new_claim(tmp_path: Path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'team.sqlite'}"
+    clock = MutableClock(datetime(2026, 1, 1, tzinfo=UTC))
+    runtime = LaunchRoomRuntime.open(url, environment="test")
+    room = _open_course(LaunchRoomService(runtime))
+    engine = _engine(runtime, clock=clock)
+    _start(engine, room)
+    first = engine.claim_one(room.launch_id, worker_id="worker-a")
+    assert first is not None
+    clock.advance(31)
+    restarted = LaunchRoomRuntime.open(url, environment="test")
+    resumed = TeamEngine(restarted.session_factory, clock=clock)
+    second = resumed.claim_one(room.launch_id, worker_id="worker-b")
+    assert second is not None
+    assert second.token != first.token
+    resumed.complete_claimed(first.job_id, worker_id="worker-a", claim_token=first.token)
+    assert _claim_state(restarted, "audience") == ("running", "worker-b")
+    resumed.complete_claimed(second.job_id, worker_id="worker-b", claim_token=second.token)
+    rows = resumed.artifact_rows(room.launch_id, "audience")
+    assert len([row for row in rows if row[1] == "current"]) == 1
+    assert _counts(restarted) == {"actions": 0, "executions": 0, "publications": 0}
+

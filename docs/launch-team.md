@@ -34,7 +34,7 @@ flowchart LR
   producer --> critic
 ```
 
-The critic reads the specialist artifacts, not the producer verdict. A job is claimed with one conditional update. An expired lease can be claimed again. Owner constraint changes mark only the affected roles stale and keep the previous rows.
+The critic reads the specialist artifacts, not the producer verdict. A job is claimed with one conditional update and a new claim token. Completion, retry, model failure, and a permanent failure change that row only while it is still running for the same token. An expired lease can be claimed again. The previous attempt cannot finish the new one, even when the worker id is reused. Owner constraint changes mark only the affected roles stale and keep the previous rows.
 
 Run the room:
 
