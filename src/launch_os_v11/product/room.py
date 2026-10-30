@@ -64,6 +64,9 @@ from launch_os_v11.product.errors import ProductError
 from launch_os_v11.product.projection import LaunchRoomView, project_launch_room
 from launch_os_v11.product.runtime import LaunchRoomRuntime
 from launch_os_v11.product.script import LaunchScriptFacts
+from launch_os_v11.product.team.contracts import LaunchConstraints
+from launch_os_v11.product.team.engine import TeamEngine
+from launch_os_v11.product.team.view import render_team_section
 from launch_os_v11.production.start import start_production_workflow
 from launch_os_v11.production.status import ProductionWorkflowStatus
 from launch_os_v11.runtime.errors import PermanentJobError
@@ -535,6 +538,84 @@ class LaunchRoomService:
         self._runtime.drain(facts)
         self._assert_decision_ready(launch_id, operator)
         return self.get_room(launch_id, operator=operator)
+
+    def run_launch_team(
+        self,
+        launch_id: str,
+        *,
+        operator: TrustedOperator,
+        budget_cents: int = 100_000,
+        weeks: int = 3,
+    ) -> LaunchRoomView:
+        organization_id, business_id, intent, offer = self._team_context(launch_id, operator)
+        engine = TeamEngine(self._runtime.session_factory)
+        engine.start(
+            launch_id=launch_id,
+            organization_id=organization_id,
+            business_id=business_id,
+            intent=intent,
+            constraints=LaunchConstraints(budget_cents, weeks, offer),
+        )
+        engine.run_until_idle(launch_id, worker_id="launch-room")
+        return self.get_room(launch_id, operator=operator)
+
+    def apply_team_change(
+        self,
+        launch_id: str,
+        *,
+        operator: TrustedOperator,
+        budget_cents: int | None = None,
+        weeks: int | None = None,
+        offer_wording: str | None = None,
+    ) -> LaunchRoomView:
+        if offer_wording:
+            _reject_worth("offer", offer_wording)
+        if budget_cents is not None and budget_cents < 0:
+            raise ProductError("invalid_input", "Budget cannot be negative.")
+        if weeks is not None and weeks < 1:
+            raise ProductError("invalid_input", "Weeks must be at least 1.")
+        self._team_context(launch_id, operator)
+        engine = TeamEngine(self._runtime.session_factory)
+        engine.apply_change(
+            launch_id,
+            budget_cents=budget_cents,
+            weeks=weeks,
+            offer_wording=offer_wording,
+        )
+        engine.run_until_idle(launch_id, worker_id="launch-room")
+        return self.get_room(launch_id, operator=operator)
+
+    def launch_team_html(self, launch_id: str, *, operator: TrustedOperator) -> str:
+        self._team_context(launch_id, operator)
+        snapshot = TeamEngine(self._runtime.session_factory).snapshot(launch_id)
+        return render_team_section(launch_id, snapshot)
+
+    def _team_context(
+        self,
+        launch_id: str,
+        operator: TrustedOperator,
+    ) -> tuple[str, str, str, str]:
+        def work(session: Session) -> tuple[str, str, str, str]:
+            launch = _launch(session, launch_id)
+            _authorize(session, launch, operator)
+            source = session.scalar(
+                select(SourceRecordModel).where(
+                    SourceRecordModel.organization_id == launch.organization_id,
+                    SourceRecordModel.business_id == launch.business_id,
+                    SourceRecordModel.external_id == f"intent-{launch.id}",
+                )
+            )
+            payload = source.payload if source is not None else {}
+            goal = payload.get("goal")
+            offer = payload.get("offer_name")
+            return (
+                launch.organization_id,
+                launch.business_id,
+                goal if isinstance(goal, str) else "UNKNOWN",
+                offer if isinstance(offer, str) else "UNKNOWN",
+            )
+
+        return self._write(work)
 
     def _prepare_decision(
         self,

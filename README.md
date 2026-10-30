@@ -52,6 +52,10 @@ mount the room. `make run-api` stays the health server.
 `tests/test_launch_room_browser.py` repeats the same route in Chromium when
 Playwright is installed. It is not required to run the room.
 
+The launch team is a separate local graph documented in
+[docs/launch-team.md](docs/launch-team.md). Its results are a test double.
+`REAL_MODEL_EXECUTION` stays `NOT_YET_PROVEN`. The team does not publish.
+
 ## Development
 
 Install dependencies:

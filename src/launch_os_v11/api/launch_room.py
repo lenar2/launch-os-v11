@@ -171,9 +171,10 @@ def launch_room_page(request: Request, launch_id: str) -> HTMLResponse:
         _reject_client_fields(dict(request.query_params))
         operator = _operator(request, launch_id)
         view = _service(request).get_room(launch_id, operator=operator)
+        team_html = _service(request).launch_team_html(launch_id, operator=operator)
     except ProductError as exc:
         return _html_error(exc)
-    return HTMLResponse(render_room(view))
+    return HTMLResponse(render_room(view, team_html))
 
 
 @router.post("/launch-room/{launch_id}/{action}", response_model=None)
@@ -264,6 +265,16 @@ def _perform(
         )
     if action == "adapt":
         return service.adapt(launch_id, operator=operator)
+    if action == "team":
+        return service.run_launch_team(launch_id, operator=operator)
+    if action == "team-change":
+        return service.apply_team_change(
+            launch_id,
+            operator=operator,
+            budget_cents=_optional_int(payload.get("budget_cents")),
+            weeks=_optional_int(payload.get("weeks")),
+            offer_wording=_optional_str(payload.get("offer_wording")),
+        )
     raise ProductError("not_found", "Unknown room action.")
 
 
@@ -275,4 +286,12 @@ def _text(payload: Mapping[str, object], key: str) -> str:
 def _optional_str(value: object) -> str | None:
     if isinstance(value, str) and value.strip():
         return value
+    return None
+
+
+def _optional_int(value: object) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
     return None

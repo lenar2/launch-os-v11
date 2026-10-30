@@ -27,6 +27,7 @@ from launch_os_v11.product.script import (
     bind_launch_script_facts,
     clear_launch_script_facts,
 )
+from launch_os_v11.product.team.store import ensure_team_tables
 from launch_os_v11.production.context import ProductionContextBuilder
 from launch_os_v11.runtime.clock import Clock, SystemClock
 from launch_os_v11.runtime.transport import JobQueue
@@ -84,13 +85,14 @@ class LaunchRoomRuntime:
                 "production_isolated",
                 "Launch Room demonstration cannot attach to a non-local database.",
             )
-        connect_args = {"check_same_thread": False}
+        connect_args = {"check_same_thread": False, "timeout": 5}
         engine_kwargs: dict[str, object] = {"future": True, "connect_args": connect_args}
         if database_url.endswith(":memory:"):
             engine_kwargs["poolclass"] = StaticPool
         engine = create_engine(database_url, **engine_kwargs)
         Base.metadata.create_all(engine)
         ensure_grant_tables(engine)
+        ensure_team_tables(engine)
         factory = create_session_factory(engine)
         queue = MemoryJobQueue()
         adapter = SyntheticLaunchAdapter()
